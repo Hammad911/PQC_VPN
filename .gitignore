@@ -3,7 +3,11 @@ __pycache__/
 *.pyc
 .env
 *.zip
-models/
+# Root-level checkpoint dumps only (do not ignore client/rl_agent/models/)
+/models/
+client/rl_agent/models/**/*.pt
+client/rl_agent/models/**/*.pth
+client/rl_agent/models/**/*.zip
 *.log
 node_modules/
 .DS_Store
