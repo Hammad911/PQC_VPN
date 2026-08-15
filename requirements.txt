@@ -1,0 +1,24 @@
+# Core cryptography (Phase 1)
+cryptography==42.0.8
+keyring==25.7.0
+
+# liboqs-python is NOT on PyPI — build liboqs (C library) from source,
+# then install the Python wrapper from https://github.com/open-quantum-safe/liboqs-python
+# liboqs-python==0.14.0
+
+# RL agent (Phase 2)
+gymnasium==0.29.1
+stable_baselines3==2.3.2
+torch==2.13.0
+numpy==1.26.4
+scikit-learn==1.5.0
+
+# System metrics / anomaly detection inputs
+psutil==6.0.0
+
+# API layer (planned — FastAPI daemon, section 3.4 of proposal)
+fastapi==0.111.0
+uvicorn==0.30.0
+
+# Testing
+pytest==8.2.2
