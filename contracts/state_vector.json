@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "generated_by": "python -m client.rl_agent.export_contracts",
+  "source_of_truth": "client/rl_agent/vpn_env.py, client/rl_agent/state_observer.py",
+  "dim": 7,
+  "dtype": "float32",
+  "range": [
+    0.0,
+    1.0
+  ],
+  "notes": [
+    "Index order is frozen. Both VPNEnv and StateObserver clip to [0,1].",
+    "The normalization caps below are reasoned first-pass choices, not calibrated against real traffic. They may be retuned; that changes the raw-metric mapping, not the interface."
+  ],
+  "fields": [
+    {
+      "index": 0,
+      "name": "CPU_LOAD",
+      "range": "0=idle, 1=saturated",
+      "semantics": "Current CPU utilization",
+      "produced_by": "StateObserver (psutil.cpu_percent)"
+    },
+    {
+      "index": 1,
+      "name": "RAM_AVAIL",
+      "range": "0=none free, 1=all free",
+      "semantics": "Fraction of RAM available",
+      "produced_by": "StateObserver (psutil.virtual_memory)"
+    },
+    {
+      "index": 2,
+      "name": "LATENCY",
+      "range": "0=fast, 1=slow/unreachable",
+      "semantics": "ICMP round-trip; saturates to 1.0 if the host is unreachable",
+      "produced_by": "StateObserver (single ping)",
+      "normalization": {
+        "latency_cap_ms": 300.0
+      }
+    },
+    {
+      "index": 3,
+      "name": "UPLOAD",
+      "range": "0=idle, 1=saturated",
+      "semantics": "Upload throughput",
+      "produced_by": "StateObserver (psutil.net_io_counters delta)",
+      "normalization": {
+        "upload_cap_bytes_per_sec": 5000000.0
+      }
+    },
+    {
+      "index": 4,
+      "name": "CONN_TYPE",
+      "range": "0=wired, 0.5=wifi/unknown, 1=cellular",
+      "semantics": "Best-effort classification from interface names",
+      "produced_by": "StateObserver",
+      "normalization": {
+        "scores": {
+          "wired": 0.0,
+          "wifi": 0.5,
+          "cellular": 1.0,
+          "unknown": 0.5
+        }
+      }
+    },
+    {
+      "index": 5,
+      "name": "TIME_SINCE_REKEY",
+      "range": "0=just rekeyed, 1=at or beyond cap",
+      "semantics": "Wall-clock since last key rotation; reset via mark_rekey()",
+      "produced_by": "StateObserver",
+      "normalization": {
+        "rekey_interval_cap_sec": 3600.0
+      }
+    },
+    {
+      "index": 6,
+      "name": "THREAT",
+      "range": "0=none, 1=confirmed anomaly",
+      "semantics": "Combined anomaly score across whichever detection layers the CPU gate allows; the consumer never needs to know which are active",
+      "produced_by": "anomaly_detector.py (Layer 1 today; Layers 2/3 land Weeks 5-8)"
+    }
+  ]
+}

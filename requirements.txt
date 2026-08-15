@@ -10,8 +10,15 @@ keyring==25.7.0
 gymnasium==0.29.1
 stable_baselines3==2.3.2
 torch==2.13.0
+# Keep numpy pinned at 1.x — installing onnx/onnxruntime will happily pull
+# numpy 2.x, which makes stable_baselines3 emit numpy.core deprecation
+# warnings when deserialising a saved model. Install this pin last.
 numpy==1.26.4
 scikit-learn==1.5.0
+
+# Policy export for the Rust client (Member 1 consumes the .onnx via `ort`)
+onnx==1.22.0
+onnxruntime==1.28.0
 
 # System metrics / anomaly detection inputs
 psutil==6.0.0

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "generated_by": "python -m client.rl_agent.export_contracts",
+  "source_of_truth": "client/vpn_daemon/algo_registry.py",
+  "action_space_size": 4,
+  "notes": [
+    "action_index is the contiguous 0..N-1 index the RL policy emits; registry_key is the algo_registry.py key and is NOT contiguous (key 3 is the disabled HQC-256).",
+    "Read action_space_size from the exported ONNX output shape rather than hardcoding it, so enabling HQC-256 later is a re-export instead of a Rust code change."
+  ],
+  "actions": [
+    {
+      "action_index": 0,
+      "registry_key": 0,
+      "name": "ML-KEM-512",
+      "standard": "NIST FIPS 203",
+      "security": 0.7,
+      "cpu_cost": 0.5,
+      "kind": "kem",
+      "liboqs_id": "ML-KEM-512"
+    },
+    {
+      "action_index": 1,
+      "registry_key": 1,
+      "name": "ML-KEM-768",
+      "standard": "NIST FIPS 203",
+      "security": 0.85,
+      "cpu_cost": 1.0,
+      "kind": "kem",
+      "liboqs_id": "ML-KEM-768"
+    },
+    {
+      "action_index": 2,
+      "registry_key": 2,
+      "name": "ML-KEM-1024",
+      "standard": "NIST FIPS 203",
+      "security": 1.0,
+      "cpu_cost": 2.0,
+      "kind": "kem",
+      "liboqs_id": "ML-KEM-1024"
+    },
+    {
+      "action_index": 3,
+      "registry_key": 4,
+      "name": "rekey-now",
+      "standard": "N/A",
+      "security": 1.0,
+      "cpu_cost": 3.0,
+      "kind": "rekey",
+      "liboqs_id": null,
+      "semantics": "re-run the handshake using the algorithm currently in force"
+    }
+  ],
+  "inactive": [
+    {
+      "registry_key": 3,
+      "name": "HQC-256",
+      "standard": "NIST 2025 draft",
+      "reason_disabled": "draft NIST standard, not finalized"
+    }
+  ]
+}
