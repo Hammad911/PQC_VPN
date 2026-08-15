@@ -12,15 +12,20 @@ forward pass, and the crypto handshake itself (real key generation,
 encapsulation, decapsulation — timed as it happens).
 
 What's staged, and printed as [STAGED]: CPU/RAM/connection-type/session
--age per scenario. Two reasons: (1) a laptop demo can't actually hop
-onto cellular or run a 45-minute session live, and (2) the trained
-policy's ML-KEM-768 decision boundary sits close enough to CPU load
-that whatever happens to be running in the background (browser, Zoom,
-whatever) can flip the outcome — see PROGRESS.md for why. Staging
-those inputs makes the demo reproducible instead of leaving it to
-chance which tier shows up. The four scenarios below were verified
-against the trained model to be stable under +-0.15 CPU / +-0.1 RAM
-jitter before being wired in here.
+-age, and in two scenarios the threat score. A laptop demo can't hop
+onto a cellular network, run a 45-minute session, or arrange a genuine
+attack on cue, so those conditions are set explicitly.
+
+Staging used to carry a second reason — the 50k model's ML-KEM-768
+boundary was so close to ambient CPU load that whatever ran in the
+background could flip the outcome. That is no longer true: after the
+Week 2 retraining the five scenarios below clear their decision
+boundaries by margins of 0.04 to 0.33 in reward terms.
+
+Each scenario was checked against the reward function before being
+wired in, and the agent's choice is printed next to the analytically
+optimal one so the demo shows whether a decision is *right*, not just
+what it was. Between them the five cover all four actions.
 
 Run with: python demo.py
 """
@@ -34,7 +39,7 @@ from stable_baselines3 import PPO
 from client.rl_agent.anomaly_detector import ZScoreBaseline
 from client.rl_agent.state_observer import StateObserver
 from client.rl_agent.vpn_env import (
-    CPU_LOAD, RAM_AVAIL, CONN_TYPE, TIME_SINCE_REKEY,
+    CPU_LOAD, RAM_AVAIL, CONN_TYPE, TIME_SINCE_REKEY, THREAT, optimal_action,
 )
 from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS
 from client.vpn_daemon.auth import ServerAuthenticator
@@ -94,9 +99,16 @@ def demo_server_auth():
     print(f"MitM substitution correctly rejected: {rejected}")
 
 
-def run_round(label, model, observer, detector, *, staged, inject_anomaly=False):
+def run_round(label, model, observer, detector, *, staged, current_algo,
+              inject_anomaly=False):
     """staged: dict of {index: value} overriding the live-read state,
-    e.g. {CPU_LOAD: 0.2, CONN_TYPE: 1.0}."""
+    e.g. {CPU_LOAD: 0.2, CONN_TYPE: 1.0}.
+
+    current_algo: the KEM currently in force for this session. A rekey
+    rotates key material at the same strength, so this is what a
+    `rekey-now` decision re-runs the handshake with. Returns the algorithm
+    in force after this round.
+    """
     banner(f"SCENARIO: {label}")
 
     if inject_anomaly:
@@ -111,8 +123,8 @@ def run_round(label, model, observer, detector, *, staged, inject_anomaly=False)
     state = observer.read_state(threat_score=result["threat_score"])
 
     STATE_NAMES = {
-        CPU_LOAD: "cpu", RAM_AVAIL: "ram_avail",
-        CONN_TYPE: "conn_type", TIME_SINCE_REKEY: "time_since_rekey",
+        CPU_LOAD: "cpu", RAM_AVAIL: "ram_avail", CONN_TYPE: "conn_type",
+        TIME_SINCE_REKEY: "time_since_rekey", THREAT: "threat",
     }
     staged_notes = []
     for idx, value in staged.items():
@@ -129,15 +141,30 @@ def run_round(label, model, observer, detector, *, staged, inject_anomaly=False)
     action, _ = model.predict(state, deterministic=True)
     algo_key = ACTION_INDEX[int(action)]
     algo = ACTIVE_ACTIONS[algo_key]
+
+    # Print the analytically optimal action next to the agent's, so the demo
+    # shows whether the decision is *right* rather than only what it was.
+    best = optimal_action(state)
+    best_name = ACTIVE_ACTIONS[ACTION_INDEX[best]]["name"]
+    verdict = "matches the optimal choice" if best == int(action) else \
+              f"DIFFERS from the optimal choice ({best_name})"
     print(f"agent decision -> {algo['name']}  "
           f"(security={algo['security']}, cpu_cost={algo['cpu_cost']})")
+    print(f"               -> {verdict}")
 
     if algo["name"] == "rekey-now":
         observer.mark_rekey()
-        print("agent triggered immediate rekey — running fresh handshake at ML-KEM-768")
-        result = run_handshake("ML-KEM-768")
+        # A rekey rotates key material without changing strength — the tier
+        # stays whatever the agent last selected. See INTERFACE_FREEZE_PROPOSAL.md;
+        # Member 2's server relies on this to swap a peer's PSK without
+        # renegotiating the algorithm.
+        print(f"agent triggered immediate rekey — fresh handshake at the "
+              f"algorithm in force ({current_algo})")
+        result = run_handshake(current_algo)
+        next_algo = current_algo
     else:
         result = run_handshake(algo["name"])
+        next_algo = algo["name"]
 
     print(
         f"handshake complete in {result['elapsed_ms']:.2f} ms  "
@@ -145,6 +172,7 @@ def run_round(label, model, observer, detector, *, staged, inject_anomaly=False)
         f"ciphertext {result['ciphertext_bytes']}B)"
     )
     print(f"shared secret (first 8 bytes): {result['shared_secret'][:8].hex()}")
+    return next_algo
 
 
 def main():
@@ -156,26 +184,44 @@ def main():
 
     demo_server_auth()
 
-    run_round(
+    # The session has to be established with something before the agent's
+    # first decision; ML-KEM-768 is hybrid_kem.py's default.
+    current_algo = "ML-KEM-768"
+
+    # Five scenarios chosen so that each of the four actions is the correct
+    # answer somewhere, and every one was checked against the reward function
+    # before being wired in — the agent agrees with the optimal choice on all
+    # five, with margins from 0.04 to 0.33. The earlier four-scenario script
+    # was built around the 50k smoke model and encoded two of its mistakes as
+    # if they were the expected behaviour.
+    current_algo = run_round(
         "idle laptop, fresh session, trusted wifi",
-        model, observer, detector,
+        model, observer, detector, current_algo=current_algo,
         staged={CPU_LOAD: 0.2, RAM_AVAIL: 0.7, CONN_TYPE: 0.0, TIME_SINCE_REKEY: 0.0},
     )
-    run_round(
-        "on cellular, 45 minutes into the session, calm traffic",
-        model, observer, detector,
-        staged={CPU_LOAD: 0.15, RAM_AVAIL: 0.75, CONN_TYPE: 1.0, TIME_SINCE_REKEY: 0.7},
-    )
-    run_round(
+    current_algo = run_round(
         "cellular + anomalous traffic spike (Layer 1 Z-score fires live)",
-        model, observer, detector,
+        model, observer, detector, current_algo=current_algo,
         staged={CPU_LOAD: 0.2, RAM_AVAIL: 0.7, CONN_TYPE: 1.0, TIME_SINCE_REKEY: 0.3},
         inject_anomaly=True,
     )
-    run_round(
+    current_algo = run_round(
+        "idle but RAM-rich device, stale session, confirmed threat",
+        model, observer, detector, current_algo=current_algo,
+        staged={CPU_LOAD: 0.1, RAM_AVAIL: 0.95, CONN_TYPE: 1.0,
+                TIME_SINCE_REKEY: 0.9, THREAT: 1.0},
+    )
+    current_algo = run_round(
+        "same threat, but the device is now loaded and low on RAM",
+        model, observer, detector, current_algo=current_algo,
+        staged={CPU_LOAD: 0.9, RAM_AVAIL: 0.3, CONN_TYPE: 1.0,
+                TIME_SINCE_REKEY: 1.0, THREAT: 1.0},
+    )
+    current_algo = run_round(
         "post-rekey, session fresh again",
-        model, observer, detector,
-        staged={CPU_LOAD: 0.2, RAM_AVAIL: 0.7, CONN_TYPE: 0.0, TIME_SINCE_REKEY: 0.0},
+        model, observer, detector, current_algo=current_algo,
+        staged={CPU_LOAD: 0.3, RAM_AVAIL: 0.65, CONN_TYPE: 0.0,
+                TIME_SINCE_REKEY: 0.0, THREAT: 0.1},
     )
 
     banner("done")

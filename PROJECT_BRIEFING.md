@@ -65,6 +65,10 @@ PQC_VPN/
 ├── PROJECT_BRIEFING.md             this document
 ├── requirements.txt                pinned dependencies
 ├── demo.py                         live end-to-end demo script
+├── contracts/                      generated interface artifacts for M1/M2
+│   ├── algo_registry.json
+│   ├── state_vector.json
+│   └── policy_test_vectors.json
 ├── client/
 │   ├── vpn_daemon/                 Phase 1 — cryptography
 │   │   ├── hybrid_kem.py
@@ -75,15 +79,22 @@ PQC_VPN/
 │   │   ├── vpn_env.py
 │   │   ├── state_observer.py
 │   │   ├── anomaly_detector.py
-│   │   ├── train.py
-│   │   └── models/ppo_vpn_agent.zip
+│   │   ├── train.py                training + the Week 2 sweep
+│   │   ├── evaluate.py             return vs baselines and the oracle
+│   │   ├── analyze_boundary.py     decision-boundary diagnostics
+│   │   ├── export_onnx.py          policy export + parity check
+│   │   ├── export_contracts.py     regenerates contracts/
+│   │   └── models/
+│   │       ├── ppo_vpn_agent.zip   the trained policy
+│   │       └── ppo_vpn_agent.onnx  what Member 1's Rust client loads
 │   └── api/                        not yet built (FastAPI daemon)
 ├── server/                         not yet built
 ├── dashboard/                      not yet built (Tauri/React)
 ├── notebooks/                      unused so far
 └── tests/
     ├── test_phase1.py
-    └── test_phase2.py
+    ├── test_phase2.py
+    └── test_phase3.py              contracts, ONNX, curriculum regressions
 ```
 
 ---
@@ -290,7 +301,7 @@ over as a leave-behind.
 pytest tests/ -v
 ```
 
-**19/19 passing.** Breakdown:
+**45/45 passing.** Breakdown:
 
 - Phase 1 (`test_phase1.py`): 10/10 — cryptographic correctness (every
   algorithm roundtrips to the same shared secret on both sides) plus
@@ -298,6 +309,15 @@ pytest tests/ -v
 - Phase 2 (`test_phase2.py`): 9/9 — environment API conformance, live
   state reading, anomaly detection, and the trained model producing valid
   output.
+- Phase 3 (`test_phase3.py`): 26/26 — added in Week 2. Three groups:
+  the artifacts Members 1 and 2 build against (generated `contracts/*.json`
+  must agree with the Python source of truth; the exported ONNX must be
+  self-contained, match its committed test vectors, and accept a dynamic
+  batch); the `curriculum` and `cpu_relax` training knobs pinned as
+  provable no-ops by default, so the environment still produces the exact
+  state sequence the frozen contract describes; and floors on the shipped
+  policy's quality (macro-recall, per-action recall, regret, decisiveness)
+  so a regression to the under-trained model cannot pass.
 
 One real bug was caught and fixed *while verifying this*, not before: the
 venv's `torch` install was missing `libtorch_cpu.dylib`, silently failing

@@ -73,6 +73,35 @@ Currently 4 active actions, in registry-key order:
 standard, not finalized — and is excluded from `ACTIVE_ACTIONS`, hence
 the gap between keys 2 and 4 above.)
 
+### 2.1 What `rekey-now` actually does (resolved Week 2)
+
+The action space says "rekey-now" without stating which algorithm the
+resulting handshake uses. That gap mattered: `demo.py` was hardcoding
+ML-KEM-768 on rekey while the registry lists the action with
+`security: 1.00`, and Member 2's Week 6 task (accept a fresh handshake
+for an *existing* peer and swap its PSK) cannot be implemented against
+an undefined answer.
+
+**Resolved: a rekey re-runs the handshake using the algorithm currently
+in force.** It rotates key material without changing strength.
+
+Rationale: "when to rotate" and "how strong" stay independent decisions.
+The proposal's stated justification for rekeying is stale session keys
+sitting in RAM — a key-lifetime concern, not a threat escalation — so
+rekeying should not silently change the negotiated tier in either
+direction. It also means the server never has to renegotiate an
+algorithm mid-session to honour a rekey.
+
+Consequences for consumers:
+- The client tracks the in-force algorithm across ticks; `rekey-now`
+  reads it rather than choosing one. `demo.py` now does this.
+- Member 2's server swaps the PSK for an existing peer at the same
+  algorithm the peer already negotiated.
+- The `security: 1.00` on registry key 4 describes the *value of
+  rotating*, not a KEM strength. `contracts/algo_registry.json` marks
+  this action `"kind": "rekey"` with `"liboqs_id": null` so it cannot be
+  mistaken for a KEM identifier.
+
 **Discussion point for the freeze meeting (not a unilateral decision):**
 if HQC-256 is enabled later, the action count silently becomes 5. The
 proposal is that Member 1's Rust consumer read the action count from the
@@ -99,11 +128,34 @@ since it affects how Member 1 writes the `core/rl/` inference wrapper.
 
 ---
 
-## 4. Forward pointer to Week 4 (ONNX export)
+## 4. ONNX export — shipped in Week 2, not Week 4
 
-For Member 1's planning: the exported model will accept a `(1, 7)`
-`float32` input tensor (batch size 1, matching the state vector above)
-and produce output over the action space defined in Section 2 — exact
-output shape (raw logits vs. probabilities vs. argmax) to be confirmed
-when the export happens in Week 4, alongside a PyTorch-vs-ONNX numerical
-parity check before it's handed off.
+This section previously said the output shape would be "confirmed when
+the export happens in Week 4". The export was pulled forward to Week 2
+instead, because Member 1's Week 7 work is the top blocking dependency in
+`TEAM_TIMELINE_PROPOSAL.md`'s own risk table and the interface — unlike
+the weights — is already stable. Confirmed shapes:
+
+| | |
+|---|---|
+| Artifact | `client/rl_agent/models/ppo_vpn_agent.onnx` (self-contained, no sidecar weights) |
+| Input `state` | `float32[batch, 7]`, values in `[0,1]`, index order per Section 1 |
+| Output `action_logits` | `float32[batch, 4]` — **raw logits; `argmax` is the chosen action** |
+| Batch dimension | dynamic (1 row on-device, N rows for offline evaluation) |
+| Parameters | 4,932 — policy network only; the value network is training-only |
+| Opset | 18 |
+
+Raw logits rather than probabilities or a baked-in argmax: `argmax` is
+identical over logits and softmax, and leaving them raw lets the consumer
+apply its own temperature later without a re-export.
+
+The PyTorch-vs-ONNX parity check runs as part of the export and fails it
+on divergence — currently `max|logit diff| = 9.5e-07` over 31 states with
+31/31 argmax agreement. Those 31 states, with their expected logits, ship
+as `contracts/policy_test_vectors.json` so the Rust `ort` wrapper can be
+verified against the same fixture.
+
+**Weights are still not frozen.** Training continues through Week 3 and
+the model will be re-exported; that is an artifact swap requiring no
+consumer change, which is precisely why shipping the interface early is
+safe. See `contracts/README.md` for the consumer-side details.
