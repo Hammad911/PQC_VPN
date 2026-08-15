@@ -4,6 +4,10 @@ __pycache__/
 .env
 *.zip
 !client/rl_agent/models/**/*.zip
+# Per-run training output (checkpoints + tensorboard): 6.6MB for one sweep, and
+# the *.zip negation above would otherwise re-include every checkpoint. Ignoring
+# the directory wins, since git does not descend into an excluded directory.
+client/rl_agent/models/runs/
 # Root-level checkpoint dumps only (do not ignore client/rl_agent/models/)
 /models/
 *.log
