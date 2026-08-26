@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "generated_by": "python -m client.rl_agent.export_contracts",
+  "generated_at_utc": "2026-08-26T13:11:41Z",
+  "git_commit": {
+    "head": "a96a26daa9d60a6712d937777da6b8e46a55d191",
+    "tree_dirty": true,
+    "note": "generated from the working tree; when tree_dirty is true the artifacts do not correspond to `head` but to the commit made immediately after it"
+  },
+  "note": "Verify every artifact against these digests after copying them into another repo. A mismatch means the set is not the one this manifest describes; re-run the generator rather than guessing which file is stale.",
+  "artifacts": {
+    "contracts/algo_registry.json": {
+      "sha256": "5b2880d44e9549a19a78ec640e14fcb47978e8c54a8993b25bb2aeda983a93dc",
+      "bytes": 1694
+    },
+    "contracts/state_vector.json": {
+      "sha256": "5efa99cdc2d1f616fb4ebc61d9c56bc402d19257b85be94bab506bfc0e0ae5e3",
+      "bytes": 2560
+    },
+    "contracts/policy_test_vectors.json": {
+      "sha256": "4bc76fe6cbd9a048c18d5b667bbfa69d1b2d7731e9f7ddd77074aadadf11bdfb",
+      "bytes": 23319
+    },
+    "contracts/decision_gate_vectors.json": {
+      "sha256": "2d526359819fd4c54708cb576cb18ca6dfe20309501e664b51cd1c69f1ab3ee0",
+      "bytes": 9713
+    },
+    "client/rl_agent/models/ppo_vpn_agent.onnx": {
+      "sha256": "e8179dd5d8f7461eb329bc858e1b7b84cc3f2afd71f251d7b7fbb8316ee95f08",
+      "bytes": 29693
+    }
+  }
+}

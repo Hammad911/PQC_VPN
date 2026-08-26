@@ -15,13 +15,17 @@ delegates to export_onnx for the model artifact and its test vectors.
 
 Run with: python -m client.rl_agent.export_contracts
 """
+import hashlib
 import json
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from client.rl_agent import export_onnx  # noqa: E402
+from client.rl_agent import decision_gate  # noqa: E402
 from client.rl_agent.state_observer import (  # noqa: E402
     CONNECTION_TYPE_SCORE,
     LATENCY_CAP_MS,
@@ -153,6 +157,141 @@ def build_state_vector() -> dict:
     }
 
 
+# Scenario names double as the failure message a Rust test prints, so they say
+# what the tick sequence is exercising rather than "case 3".
+_GATE_SCENARIOS = [
+    ("steady state: policy agrees with the algorithm in force", 0, [
+        [0.97, 0.02, 0.005, 0.005]] * 4),
+    ("single-tick noise spike is absorbed, no handshake", 0, [
+        [0.97, 0.02, 0.005, 0.005],
+        [0.02, 0.95, 0.02, 0.01],
+        [0.97, 0.02, 0.005, 0.005],
+        [0.97, 0.02, 0.005, 0.005]]),
+    ("sustained escalation is confirmed on the third tick", 0, [
+        [0.97, 0.02, 0.005, 0.005],
+        [0.02, 0.95, 0.02, 0.01],
+        [0.02, 0.95, 0.02, 0.01],
+        [0.02, 0.95, 0.02, 0.01],
+        [0.02, 0.95, 0.02, 0.01]]),
+    ("alternating challengers never accumulate a streak", 0, [
+        [0.02, 0.95, 0.02, 0.01],
+        [0.02, 0.02, 0.95, 0.01],
+        [0.02, 0.95, 0.02, 0.01],
+        [0.02, 0.02, 0.95, 0.01]]),
+    ("ambiguous state: margin below threshold blocks the change", 0, [
+        [0.45, 0.52, 0.02, 0.01]] * 5),
+    ("rekey fires immediately, then the cooldown holds", 0, [
+        [0.05, 0.05, 0.10, 0.80],
+        [0.05, 0.05, 0.10, 0.80],
+        [0.05, 0.05, 0.10, 0.80]]),
+    ("rekey escalates to the policy's top-ranked KEM", 0, [
+        [0.02, 0.10, 0.28, 0.60]]),
+    ("rekey never downgrades the algorithm in force", 2, [
+        [0.30, 0.05, 0.05, 0.60]]),
+]
+
+
+def build_decision_gate_vectors() -> dict:
+    cases = []
+    for name, initial, ticks in _GATE_SCENARIOS:
+        gate = decision_gate.DecisionGate(in_force=initial)
+        steps = []
+        for probs in ticks:
+            d = gate.update(probs)
+            steps.append({
+                "probs": [round(float(x), 6) for x in probs],
+                "expect": {
+                    "in_force": d.in_force,
+                    "in_force_name": d.in_force_name,
+                    "change_algorithm": bool(d.change_algorithm),
+                    "rekey": bool(d.rekey),
+                },
+            })
+        cases.append({"name": name, "initial_in_force": initial, "ticks": steps})
+
+    return {
+        "schema_version": 1,
+        "generated_by": GENERATOR,
+        "source_of_truth": "client/rl_agent/decision_gate.py",
+        "purpose": (
+            "Verify a port of the decision gate tick-for-tick. Feed each "
+            "case's `probs` (softmax over the ONNX logits) to the gate in "
+            "order, starting from `initial_in_force`, and assert the three "
+            "`expect` fields after every tick. The gate is stateful, so a "
+            "case only means anything replayed in sequence from a fresh gate."
+        ),
+        "constants": {
+            "tick_seconds": decision_gate.TICK_SECONDS,
+            "confirm_ticks": decision_gate.CONFIRM_TICKS,
+            "min_margin": decision_gate.MIN_MARGIN,
+            "rekey_cooldown_ticks": decision_gate.REKEY_COOLDOWN_TICKS,
+            "rekey_escalates": decision_gate.REKEY_ESCALATES,
+        },
+        "cases": cases,
+    }
+
+
+def build_manifest(artifacts: list[str]) -> dict:
+    """Checksums for everything a consumer copies out of this repo.
+
+    The hazard this closes: `ppo_vpn_agent.onnx`, `policy_test_vectors.json`
+    and `algo_registry.json` only agree with each other if they came from the
+    same export. Once Member 1 copies them into a Rust crate's assets, nothing
+    downstream can tell a matched set from a stale one — and a stale policy
+    paired with a current registry fails silently, as wrong algorithm choices
+    rather than an error. Hashing them together means the Rust build can
+    assert the set is coherent before it ships.
+    """
+    entries = {}
+    for rel in artifacts:
+        path = REPO_ROOT / rel
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries[rel] = {"sha256": digest, "bytes": path.stat().st_size}
+
+    return {
+        "schema_version": 1,
+        "generated_by": GENERATOR,
+        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "git_commit": _git_commit(),
+        "note": (
+            "Verify every artifact against these digests after copying them "
+            "into another repo. A mismatch means the set is not the one this "
+            "manifest describes; re-run the generator rather than guessing "
+            "which file is stale."
+        ),
+        "artifacts": entries,
+    }
+
+
+def _git_commit() -> dict | None:
+    """HEAD, plus whether the tree was dirty when this ran.
+
+    The commit alone would be misleading: these files are normally generated
+    *before* the commit that ships them, so HEAD is the previous one. The
+    dirty flag says so out loud instead of letting a consumer assume the
+    artifacts correspond to that commit's contents.
+    """
+    def _run(*args: str) -> str | None:
+        try:
+            out = subprocess.run(["git", "-C", str(REPO_ROOT), *args],
+                                 capture_output=True, text=True, timeout=5)
+            return out.stdout if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    head = _run("rev-parse", "HEAD")
+    if head is None:
+        return None
+    status = _run("status", "--porcelain")
+    return {
+        "head": head.strip(),
+        "tree_dirty": bool(status and status.strip()),
+        "note": ("generated from the working tree; when tree_dirty is true the "
+                 "artifacts do not correspond to `head` but to the commit made "
+                 "immediately after it"),
+    }
+
+
 def write(name: str, payload: dict) -> None:
     CONTRACTS_DIR.mkdir(parents=True, exist_ok=True)
     path = CONTRACTS_DIR / name
@@ -163,7 +302,20 @@ def write(name: str, payload: dict) -> None:
 def main() -> int:
     write("algo_registry.json", build_algo_registry())
     write("state_vector.json", build_state_vector())
-    return export_onnx.main()
+    write("decision_gate_vectors.json", build_decision_gate_vectors())
+    rc = export_onnx.main()
+    if rc != 0:
+        return rc
+
+    # Last, so it hashes the files this run just wrote.
+    write("manifest.json", build_manifest([
+        "contracts/algo_registry.json",
+        "contracts/state_vector.json",
+        "contracts/policy_test_vectors.json",
+        "contracts/decision_gate_vectors.json",
+        "client/rl_agent/models/ppo_vpn_agent.onnx",
+    ]))
+    return 0
 
 
 if __name__ == "__main__":

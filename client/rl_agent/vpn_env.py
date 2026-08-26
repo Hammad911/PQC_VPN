@@ -34,6 +34,14 @@ _REKEY_ACTION_IDX = next(
     if ACTIVE_ACTIONS[k]["name"] == "rekey-now"
 )
 
+# How `_high_need_initial_state` draws the resource dimensions.
+#   "low"    — the Week 2 behaviour: low CPU, high free RAM, so paying for a
+#              strong algorithm is affordable and ML-KEM-1024 is usually right.
+#   "spread" — uniform CPU/RAM, so the corner spans the pressure at which
+#              rekey-now overtakes ML-KEM-1024 instead of sitting well below it.
+# See the Week 3 section of PROGRESS.md for why "low" alone was not enough.
+CURRICULUM_PRESSURE_MODES = ("low", "spread")
+
 # state vector indices, matching StateObserver.read_state() ordering
 CPU_LOAD, RAM_AVAIL, LATENCY, UPLOAD, CONN_TYPE, TIME_SINCE_REKEY, THREAT = range(7)
 
@@ -93,6 +101,32 @@ def action_rewards(state: np.ndarray) -> np.ndarray:
     )
 
 
+def security_need_batch(states: np.ndarray) -> np.ndarray:
+    """How much security the situation calls for, per state, in [0,1].
+
+    Pulled out of `action_rewards_batch` because the Week 3 verification
+    buckets states by this quantity, and a second hand-copy of the weights is
+    exactly the drift `contracts/` exists to prevent. It is also the single
+    quantity that decides which algorithm is optimal, so a reader tracing
+    "why did the agent pick 1024 here" starts here.
+    """
+    states = np.asarray(states, dtype=np.float64)
+    return np.clip(
+        0.4 * states[:, THREAT]
+        + 0.3 * states[:, CONN_TYPE]
+        + 0.3 * states[:, TIME_SINCE_REKEY],
+        0.0, 1.0,
+    )
+
+
+def resource_pressure_batch(states: np.ndarray) -> np.ndarray:
+    """How expensive it is to pay for security right now, per state, in [0,1]."""
+    states = np.asarray(states, dtype=np.float64)
+    return np.clip(
+        0.5 * states[:, CPU_LOAD] + 0.5 * (1.0 - states[:, RAM_AVAIL]), 0.0, 1.0
+    )
+
+
 def action_rewards_batch(states: np.ndarray) -> np.ndarray:
     """Vectorised `action_rewards` over an (N, 7) batch, returning (N, n_actions).
 
@@ -103,15 +137,8 @@ def action_rewards_batch(states: np.ndarray) -> np.ndarray:
     (a Python loop, four calls per state) is far too slow for that.
     """
     states = np.asarray(states, dtype=np.float64)
-    need = np.clip(
-        0.4 * states[:, THREAT]
-        + 0.3 * states[:, CONN_TYPE]
-        + 0.3 * states[:, TIME_SINCE_REKEY],
-        0.0, 1.0,
-    )
-    pressure = np.clip(
-        0.5 * states[:, CPU_LOAD] + 0.5 * (1.0 - states[:, RAM_AVAIL]), 0.0, 1.0
-    )
+    need = security_need_batch(states)
+    pressure = resource_pressure_batch(states)
 
     columns = []
     for action_idx in range(len(_ACTION_TO_ALGO_KEY)):
@@ -153,15 +180,22 @@ class VPNEnv(gym.Env):
     # of the interface, and positionally `VPNEnv(200, 0, 0.5)` would silently
     # mean "curriculum=0.5" to a reader expecting the old two-arg signature.
     def __init__(self, episode_len: int = 200, seed: int | None = None, *,
-                 curriculum: float = 0.0, cpu_relax: float = 0.0):
+                 curriculum: float = 0.0, cpu_relax: float = 0.0,
+                 curriculum_pressure: str = "low"):
         super().__init__()
         if not 0.0 <= curriculum <= 1.0:
             raise ValueError(f"curriculum must be in [0,1], got {curriculum}")
         if not 0.0 <= cpu_relax <= 1.0:
             raise ValueError(f"cpu_relax must be in [0,1], got {cpu_relax}")
+        if curriculum_pressure not in CURRICULUM_PRESSURE_MODES:
+            raise ValueError(
+                f"curriculum_pressure must be one of "
+                f"{sorted(CURRICULUM_PRESSURE_MODES)}, got {curriculum_pressure!r}"
+            )
         self.episode_len = episode_len
         self.curriculum = float(curriculum)
         self.cpu_relax = float(cpu_relax)
+        self.curriculum_pressure = curriculum_pressure
         self._cpu_baseline = 0.0
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(STATE_DIM,), dtype=np.float32
@@ -192,9 +226,24 @@ class VPNEnv(gym.Env):
         s[THREAT] = self._rng.beta(4.0, 1.0)
         s[CONN_TYPE] = self._rng.beta(4.0, 1.0)
         s[TIME_SINCE_REKEY] = self._rng.beta(4.0, 1.0)
-        # low resource pressure, so paying for a stronger algorithm is viable
-        s[CPU_LOAD] = self._rng.beta(1.0, 3.0)
-        s[RAM_AVAIL] = self._rng.beta(3.0, 1.0)
+        if self.curriculum_pressure == "spread":
+            # Week 3. The "low" draw below biases resource pressure to ~0.25,
+            # but ML-KEM-1024 stops being optimal around pressure 0.5, where
+            # rekey-now takes over. So the corner it oversamples is almost
+            # entirely on one side of the decision it is meant to teach:
+            # measured, only 20% of its high-need resets land in the
+            # [0.35, 0.60] band, and the oracle labels there run 2900:41 in
+            # ML-KEM-1024's favour. The agent therefore learns "high need ->
+            # strong algorithm" with barely any counterexample showing it
+            # where to stop, and places the boundary ~0.15 too early.
+            # Uniform draws centre pressure on 0.5 and put roughly balanced
+            # labels either side of the real boundary.
+            s[CPU_LOAD] = self._rng.uniform(0.0, 1.0)
+            s[RAM_AVAIL] = self._rng.uniform(0.0, 1.0)
+        else:
+            # low resource pressure, so paying for a stronger algorithm is viable
+            s[CPU_LOAD] = self._rng.beta(1.0, 3.0)
+            s[RAM_AVAIL] = self._rng.beta(3.0, 1.0)
         return s.astype(np.float32)
 
     def _random_initial_state(self) -> np.ndarray:

@@ -464,20 +464,236 @@ as never selecting it, and a one-sided "nonzero" target is trivially gamed.
   analytically optimal before being wired in, which the previous four were
   not — two of them encoded the smoke model's mistakes as expected behaviour.
 
+## Week 3 (Member 3 track, 2026-08-26) — re-verification, and what it found
+
+The assigned task (`TEAM_TIMELINE_PROPOSAL.md`) was to re-verify the retrained
+policy the same way it was verified before — bucket-by-security-need
+distribution check, jitter-stability check — and confirm all four actions now
+have a *robust* margin rather than a technically-correct-on-average one.
+
+The verification is built (`client/rl_agent/verify_policy.py`, `python -m
+client.rl_agent.verify_policy`). Its answer is split: **stability is fine, and
+it found a defect the Week 2 aggregates could not see.**
+
+### The checks, and why they are shaped this way
+
+- **Bucket-by-security-need.** Policy vs oracle action distribution in ten
+  `security_need` buckets. Bucketed rather than pooled because the pooled
+  number is dominated by low-need states: ~76% of a uniform sample has
+  `need <= 0.7`, where ML-KEM-512 is trivially correct, so a policy that is
+  perfect there and useless above 0.9 still scores >90% pooled. Which is
+  exactly what happened.
+- **Jitter stability.** Perturb the state, count decision flips. The metric
+  reported is the *unjustified* flip rate — the policy changing its mind while
+  the oracle does not. A flip the oracle also makes is the policy correctly
+  tracking a real boundary, and counting that as instability would penalise it
+  for being right.
+- **Robust margin.** Of the decisions the policy gets right, how many are held
+  by enough probability mass to survive noise. "All four actions reachable"
+  (Week 2) is about the argmax; fragility is about the gap underneath it, and
+  the second does not follow from the first.
+
+### Result 1 — the margins are robust
+
+| metric | measured |
+|---|---|
+| unjustified flip rate, +/-0.05 jitter on CPU/RAM | 0.13% |
+| ...+/-0.10 | 0.19% |
+| ...+/-0.15 | 0.23% |
+| fragile share of correct decisions (margin < 0.10) | 0.20% |
+| median margin on correct decisions | 0.89 – 1.00 per action |
+
+So the Week 1 fragility concern is genuinely resolved: where the policy is
+right, it is decisively right, and ordinary sensor noise does not move it. The
+worst case is ML-KEM-1024-optimal states at 2.9% unjustified flips under
++/-0.05 — the highest of the four, and the number the decision gate below is
+sized against.
+
+### Result 2 — a dead band at the top of the security-need range
+
+| need bucket | n | policy modal | oracle modal | agreement | regret |
+|---|---|---|---|---|---|
+| [0.00, 0.70) | 34,756 | ML-KEM-512 | ML-KEM-512 | 100.0% | 0.0000 |
+| [0.70, 0.80) | 3,674 | ML-KEM-768 | ML-KEM-768 | 97.8% | 0.0001 |
+| [0.80, 0.90) | 1,368 | ML-KEM-768 | ML-KEM-768 | 89.0% | 0.0146 |
+| **[0.90, 1.00)** | **202** | **rekey-now** | **ML-KEM-1024** | **46.5%** | **0.0504** |
+
+Above `need = 0.90` the policy asks for `rekey-now` on 75.3% of states. On a
+6,000-state sample of that band its agreement is 50.9%, and the confusion is
+entirely one-directional:
+
+```
+oracle \ policy    512    768   1024   rekey
+   ML-KEM-768        0      0      0     914
+  ML-KEM-1024        0      0   1479    2034
+    rekey-now        0      0      0    1573
+```
+
+It never picks something too weak. It picks `rekey-now` instead of escalating.
+This band is ~0.5% of a uniform sample, which is why every Week 2 aggregate
+stayed clean while it was broken — 99.3% agreement, 0.0007 mean regret, and
+all four actions reachable are all still true.
+
+### Root cause: the reward model, not the training
+
+The obvious hypothesis was training coverage. The Week 2 curriculum draws its
+high-need corner at *low* resource pressure (median 0.234), while the
+ML-KEM-1024 / rekey-now boundary sits near pressure 0.5 — so only 20% of those
+resets land in the [0.35, 0.60] band, and the oracle labels there run 2900:41
+in ML-KEM-1024's favour. Barely any counterexample showing the agent where to
+stop.
+
+So a `curriculum_pressure="spread"` mode was added (uniform CPU/RAM at high
+need), which raises in-band coverage 20.3% -> 43.7% and the rekey-now
+counterexamples 41 -> 831. Ablated at 300k timesteps x 3 seeds, F re-run as a
+control so both arms are scored by the same code:
+
+| config | macro-recall | ML-KEM-1024 recall | high-need agreement |
+|---|---|---|---|
+| F control (Week 2 model) | 87.6 +/- 0.9 | 55.0% | **49.9%** |
+| H curriculum spread | 86.2 +/- 3.6 | 54.4% | **52.7%** |
+
+**It is not a coverage problem.** 49.9% -> 52.7% is inside seed noise (sd 3.6).
+This is the second time an assigned lever has turned out not to be the
+mechanism — Week 2's entropy bonus was the first — and for the same underlying
+reason: no amount of exploration fixes an objective that is specified wrongly.
+
+The actual cause is in `action_reward`. The `rekey-now` branch scores purely on
+urgency and never references `algo["security"]`:
+
+```python
+urgency = 0.5 * state[THREAT] + 0.5 * state[TIME_SINCE_REKEY]
+reward  = urgency - 0.5 * (1.0 - urgency) - 0.3
+```
+
+But Week 2 pinned the *semantics* of that action as "re-run the handshake using
+the algorithm currently in force" — so a rekey does not raise the security
+level at all. The reward function credits it as though it satisfies security
+need; the semantics say it does nothing of the kind. Where the policy rekeys at
+high need, mean `security_need` is 0.926, so if ML-KEM-512 is the algorithm in
+force the real shortfall is 0.226 — an uncharged reward loss of 0.678 per step,
+against a reward function that charges zero.
+
+**The agent is correctly optimising a wrong objective.** This is the same class
+of bug as the two reward-shaping bugs in Section 6, and it is the third.
+
+Fixing it properly is not a Week 3 decision. The clean fix needs the agent to
+know which algorithm is currently in force, and that is not one of the seven
+frozen state dimensions — Members 1 and 2 are building against that contract
+right now, and changing it unilaterally is precisely the wrong move. It is
+written up for the Week 4 checkpoint, which exists for this ("everyone
+re-confirms the contracts held up under actual implementation").
+
+### The mitigation that does not touch the contract
+
+There is one available, and it needs no interface change at all: when the
+policy asks for a rekey, rekey at the **stronger** of {algorithm in force, the
+policy's top-ranked KEM}. The information is already in the logits Member 1
+receives.
+
+| what the client rekeys at | mean security shortfall | states left short |
+|---|---|---|
+| the algorithm in force (literal Week 2 rule), ML-KEM-512 case | 0.2260 | 100.0% |
+| **the policy's top-ranked KEM** | **0.0222** | 36.5% |
+| the oracle's choice (floor) | 0.0115 | 20.2% |
+
+Stated honestly: that is a decision-quality measurement on the high-need
+states. On full simulated sessions the effect is much smaller (mean shortfall
+0.0083 -> 0.0076), because the simulator's CPU ratchet rarely keeps a session
+in the region where it applies. Both numbers are in
+`models/decision_gate_sizing.json`; neither is quoted without the other.
+
+This is a proposed amendment to frozen semantics, so it ships as a flag
+(`rekey_escalates`, default on, `False` restores Week 2 exactly) and is flagged
+for Member 2's sign-off rather than adopted unilaterally.
+
+### Shipped for Members 1 and 2
+
+The user-facing half of the week, and the reason the jitter measurement is not
+a report-only diagnostic — it sizes a rule that ships.
+
+- **`client/rl_agent/decision_gate.py`** — the debounce between the policy's
+  argmax and the crypto layer. The policy is a pure function of a noisy state,
+  and a *change* of algorithm costs a full handshake, so acting on the raw
+  argmax means paying a handshake for sensor noise. Measured over 133
+  client-hours at +/-0.05 noise: **71.0 handshakes/hour raw, 34.5 gated** —
+  about half of all renegotiations were the client arguing with `psutil`.
+  Sized from the jitter numbers above: a challenger must win `confirm_ticks=3`
+  consecutive ticks and beat the incumbent by `min_margin=0.15`.
+
+  The cost is stated with the benefit: legitimate escalations are delayed by a
+  median of 2 ticks (10s), p95 4 ticks (20s). `python -m
+  client.rl_agent.decision_gate` re-derives both sides across
+  `confirm_ticks in {1,2,4}` so the constants can be re-checked rather than
+  trusted.
+
+  Two honest notes. The rekey cooldown never binds in simulation — rekeys are
+  already spaced further apart than 12 ticks — so it is a safety rail for the
+  correlated-noise case the simulator does not model, not a measured win. And
+  the gate slightly *increases* mean security shortfall (0.0045 -> 0.0070),
+  which is the escalation delay showing up; halving the handshake rate is what
+  is being bought with it.
+
+- **`contracts/decision_gate_vectors.json`** — eight named tick sequences with
+  the expected decision after every tick, generated from the reference
+  implementation, so the Rust port is verified exactly the way the ONNX wrapper
+  and the Phase 1 crypto port already are. `tests/test_phase4.py` replays them
+  against the Python, so a hand-edit or an un-regenerated change fails CI.
+
+- **`contracts/manifest.json`** — SHA-256 of every artifact plus the git commit
+  they came from. The artifacts are only correct *as a set*: a stale
+  `.onnx` paired with a current `algo_registry.json` does not throw, it returns
+  action indices meaning something different from what the registry says. That
+  deserves a checksum, not a convention.
+
+- **`contracts/INTEGRATION.md`** — the step-by-step for both members, including
+  which parts Member 2 can ignore (all of it except `algo_registry.json`).
+
+- **`tests/test_phase4.py`** — 21 tests. The gate behaviour and the manifest are
+  pinned hard; the policy floors are set below what was measured so seed noise
+  cannot fail the suite, and above pre-Week-2 behaviour so a regression cannot
+  pass. `test_high_need_agreement_does_not_regress_below_measured` pins the
+  known defect at 0.45 against a measured 0.51 — a floor to stop it worsening
+  while the reward question is open, to be raised rather than deleted once it
+  is settled.
+
+### Corrections to earlier write-ups
+
+- `policy_test_vectors.json` carries **63** vectors, not 31. The Week 2 text
+  described the pre-retrain export and was not updated when the model was
+  promoted. `contracts/README.md` and `INTERFACE_FREEZE_PROPOSAL.md` are fixed.
+- Re-running `export_contracts` produced byte-identical `.onnx` and test
+  vectors, confirming the shipped artifacts already matched the promoted model
+  and that the export is deterministic.
+
+### Status against the Week 3 mandate
+
+"Confirm all four actions now have a robust margin." Three of the four do.
+ML-KEM-1024's margin is robust where the policy selects it, but it is
+under-selected in the band it exists for, and that is a reward-model defect
+rather than a margin one. Reported rather than papered over, with the cause
+diagnosed, an ablation showing the obvious fix does not work, a
+contract-preserving mitigation shipped, and the real fix put in front of the
+Week 4 checkpoint where the interface decision belongs.
+
 ## How to reproduce
 
 ```bash
 source venv/bin/activate
 pip install -r requirements.txt   # liboqs-python must be built separately
-pytest tests/ -v                  # 34/34
+pytest tests/ -v                  # 66/66
 
 python demo.py                            # end-to-end walkthrough
 python -m client.rl_agent.evaluate        # return vs baselines and the oracle
 python -m client.rl_agent.analyze_boundary  # the four before/after metrics
 python -m client.rl_agent.export_contracts  # regenerate contracts/ + the .onnx
 
+python -m client.rl_agent.verify_policy      # Week 3 robustness checks
+python -m client.rl_agent.decision_gate     # sizes the debounce constants
+
 python -m client.rl_agent.train             # single run, Week 2 defaults
-python -m client.rl_agent.train --sweep --promote   # the Week 2 experiment
+python -m client.rl_agent.train --sweep --promote            # the Week 2 experiment
+python -m client.rl_agent.train --sweep --ladder week3 --timesteps 300000   # Week 3 ablation
 ```
 
 Note on `pip install`: installing `onnx`/`onnxruntime` pulls numpy 2.x,

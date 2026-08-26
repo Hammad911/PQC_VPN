@@ -1,0 +1,441 @@
+{
+  "schema_version": 1,
+  "generated_by": "python -m client.rl_agent.export_contracts",
+  "source_of_truth": "client/rl_agent/decision_gate.py",
+  "purpose": "Verify a port of the decision gate tick-for-tick. Feed each case's `probs` (softmax over the ONNX logits) to the gate in order, starting from `initial_in_force`, and assert the three `expect` fields after every tick. The gate is stateful, so a case only means anything replayed in sequence from a fresh gate.",
+  "constants": {
+    "tick_seconds": 5,
+    "confirm_ticks": 3,
+    "min_margin": 0.15,
+    "rekey_cooldown_ticks": 12,
+    "rekey_escalates": true
+  },
+  "cases": [
+    {
+      "name": "steady state: policy agrees with the algorithm in force",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "single-tick noise spike is absorbed, no handshake",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "sustained escalation is confirmed on the third tick",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.97,
+            0.02,
+            0.005,
+            0.005
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 1,
+            "in_force_name": "ML-KEM-768",
+            "change_algorithm": true,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 1,
+            "in_force_name": "ML-KEM-768",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "alternating challengers never accumulate a streak",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.02,
+            0.95,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.95,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.02,
+            0.02,
+            0.95,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "ambiguous state: margin below threshold blocks the change",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.45,
+            0.52,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.45,
+            0.52,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.45,
+            0.52,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.45,
+            0.52,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.45,
+            0.52,
+            0.02,
+            0.01
+          ],
+          "expect": {
+            "in_force": 0,
+            "in_force_name": "ML-KEM-512",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "rekey fires immediately, then the cooldown holds",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.05,
+            0.05,
+            0.1,
+            0.8
+          ],
+          "expect": {
+            "in_force": 2,
+            "in_force_name": "ML-KEM-1024",
+            "change_algorithm": false,
+            "rekey": true
+          }
+        },
+        {
+          "probs": [
+            0.05,
+            0.05,
+            0.1,
+            0.8
+          ],
+          "expect": {
+            "in_force": 2,
+            "in_force_name": "ML-KEM-1024",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        },
+        {
+          "probs": [
+            0.05,
+            0.05,
+            0.1,
+            0.8
+          ],
+          "expect": {
+            "in_force": 2,
+            "in_force_name": "ML-KEM-1024",
+            "change_algorithm": false,
+            "rekey": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "rekey escalates to the policy's top-ranked KEM",
+      "initial_in_force": 0,
+      "ticks": [
+        {
+          "probs": [
+            0.02,
+            0.1,
+            0.28,
+            0.6
+          ],
+          "expect": {
+            "in_force": 2,
+            "in_force_name": "ML-KEM-1024",
+            "change_algorithm": false,
+            "rekey": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "rekey never downgrades the algorithm in force",
+      "initial_in_force": 2,
+      "ticks": [
+        {
+          "probs": [
+            0.3,
+            0.05,
+            0.05,
+            0.6
+          ],
+          "expect": {
+            "in_force": 2,
+            "in_force_name": "ML-KEM-1024",
+            "change_algorithm": false,
+            "rekey": true
+          }
+        }
+      ]
+    }
+  ]
+}

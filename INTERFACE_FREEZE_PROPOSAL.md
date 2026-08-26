@@ -150,8 +150,8 @@ identical over logits and softmax, and leaving them raw lets the consumer
 apply its own temperature later without a re-export.
 
 The PyTorch-vs-ONNX parity check runs as part of the export and fails it
-on divergence — currently `max|logit diff| = 9.5e-07` over 31 states with
-31/31 argmax agreement. Those 31 states, with their expected logits, ship
+on divergence — currently `max|logit diff| = 7.6e-06` over 63 states with
+63/63 argmax agreement. Those 63 states, with their expected logits, ship
 as `contracts/policy_test_vectors.json` so the Rust `ort` wrapper can be
 verified against the same fixture.
 
@@ -159,3 +159,58 @@ verified against the same fixture.
 the model will be re-exported; that is an artifact swap requiring no
 consumer change, which is precisely why shipping the interface early is
 safe. See `contracts/README.md` for the consumer-side details.
+
+---
+
+## 5. Decision gating — added Week 3
+
+The sections above define what the policy *is*. Week 3 added the rule for how
+a client should *act* on it, because measurement showed the two are not the
+same thing.
+
+The policy is a pure function of a state built from noisy sensors, and a
+change of algorithm costs a full handshake. Acting on the raw argmax every
+tick therefore pays a handshake for sensor noise: measured over 133 simulated
+client-hours at +/-0.05 observation noise, **71.0 handshakes/hour acting on
+the argmax directly versus 34.5 through the gate**.
+
+| | |
+|---|---|
+| Reference implementation | `client/rl_agent/decision_gate.py` |
+| Test vectors | `contracts/decision_gate_vectors.json` (8 tick sequences) |
+| Input | softmax over the ONNX logits (not raw logits — the margin test compares probability mass) |
+| Output | `in_force`, `change_algorithm`, `rekey` |
+| Rule | a challenger must be argmax for `confirm_ticks = 3` consecutive ticks *and* beat the incumbent by `min_margin = 0.15` |
+| Rekey | fires immediately (it is an event, not a mode), rate-limited by `rekey_cooldown_ticks = 12` |
+| Cost | legitimate escalations delayed by a median 2 ticks (10s), p95 4 ticks (20s) |
+
+The constants are sized from Week 3's jitter measurement, not chosen by feel:
+the per-tick unjustified flip rate is 0.13% overall and 2.9% on
+ML-KEM-1024-optimal states, and requiring three consecutive wins pushes the
+expected spurious-change interval past a typical session length.
+
+**This is frozen in the same sense as the rest of the document** — the rule and
+its constants are the contract; that they were derived from a measurement does
+not make them negotiable per-client, or the desktop and mobile ports would
+debounce differently.
+
+### Open item for the Week 4 checkpoint
+
+Section 2.1 pinned a rekey as "re-run the handshake at the algorithm currently
+in force". Week 3 found that under this rule, high-security-need sessions
+re-handshake at whatever they already had — often ML-KEM-512 — leaving a mean
+security shortfall of 0.226 against what the situation calls for, because the
+policy asks for `rekey-now` on 75% of those states.
+
+Proposed amendment: rekey at the **stronger** of {algorithm in force, the
+policy's top-ranked KEM}, never weaker. This cuts the shortfall to 0.022
+(oracle floor 0.012) using information already in the logits, so it costs no
+interface change and no extra inference. Escalating during a handshake you are
+performing anyway is free; downgrading on one noisy tick is not, which is why
+it is a `max` and downgrades still go through the confirm-ticks path.
+
+It is implemented behind `rekey_escalates` (default on; `False` gives exactly
+the Week 2 semantics) and **needs Member 2's sign-off**, since it means a rekey
+can arrive at a different algorithm than the one in force. Raised here rather
+than changed unilaterally — see `PROGRESS.md` Week 3 for the underlying
+reward-model defect that produces the behaviour.

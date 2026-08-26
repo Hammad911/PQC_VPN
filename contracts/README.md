@@ -18,7 +18,10 @@ integration.
 |---|---|---|
 | `algo_registry.json` | Member 1 (`core/rl/`, `core/crypto/`), Member 2 (server) | The action space. Maps the policy's `action_index` → algorithm name / liboqs identifier / security / CPU cost. |
 | `state_vector.json` | Member 1 (`core/state/`) | The 7-dim observation contract: index order, ranges, semantics, and the normalization caps `StateObserver` currently applies. |
-| `policy_test_vectors.json` | Member 1 (`core/rl/`) | 31 states with the exact logits the Python model produces, for verifying the Rust `ort` wrapper. |
+| `policy_test_vectors.json` | Member 1 (`core/rl/`) | 63 states with the exact logits the Python model produces, for verifying the Rust `ort` wrapper. |
+| `decision_gate_vectors.json` | Member 1 (`core/rl/`) | Tick-by-tick expected output of the decision gate — the debounce that sits between the policy's argmax and the crypto layer. Added Week 3. |
+| `manifest.json` | Members 1 and 2 | SHA-256 of every artifact above plus the git commit they came from, so a stale copy is detectable instead of silently wrong. Added Week 3. |
+| `INTEGRATION.md` | Members 1 and 2 | Step-by-step: build the state vector, run the policy, verify the port, gate the decision, act on it. **Start here.** |
 | `../client/rl_agent/models/ppo_vpn_agent.onnx` | Member 1 (`core/rl/`) | The policy itself. Self-contained single file — no sidecar weights. |
 
 ## The model artifact
@@ -48,6 +51,14 @@ chosen action should never differ.
 This mirrors how the Phase 1 crypto port is verified — same inputs, same
 expected outputs, two independent implementations.
 
+## Do not act on the argmax directly
+
+Added in Week 3, and the one thing here that is easy to miss: the raw argmax
+is not the client's decision. It is noisy enough that acting on it directly
+doubles the handshake rate (measured: 71.0/hour raw vs 34.5/hour gated, over
+133 client-hours at +/-0.05 observation noise). `decision_gate_vectors.json`
+and `INTEGRATION.md` cover the debounce that goes between them.
+
 ## Stability
 
 The **shapes and semantics** here are frozen. The **weights** are not:
@@ -57,7 +68,9 @@ whole reason this was shipped in Week 2 rather than Week 4.
 
 Current weights are from the Week 2 run `F_ep4_full_s1` (300k timesteps),
 which agrees with the analytically optimal action on 99.3% of states and
-selects all four actions. `PROGRESS.md` documents what has and has not
+selects all four actions. Week 3's verification qualifies that headline: the
+agreement is ~51% on the small band where `security_need >= 0.90`, which is a
+known open defect with a diagnosed cause, not a mystery. `PROGRESS.md` documents what has and has not
 been established about it — in particular, "optimal" there means optimal
 with respect to a hand-designed reward in a simulator, not a measured
 security outcome.

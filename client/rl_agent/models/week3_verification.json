@@ -1,0 +1,219 @@
+{
+  "model": "/Users/hammadahmed/Desktop/PQC_VPN/client/rl_agent/models/ppo_vpn_agent.zip",
+  "buckets": [
+    {
+      "lo": 0.0,
+      "hi": 0.1,
+      "n": 192,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.1,
+      "hi": 0.2,
+      "n": 1278,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.2,
+      "hi": 0.30000000000000004,
+      "n": 3495,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.30000000000000004,
+      "hi": 0.4,
+      "n": 6465,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.4,
+      "hi": 0.5,
+      "n": 8525,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.5,
+      "hi": 0.6000000000000001,
+      "n": 8500,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.6000000000000001,
+      "hi": 0.7000000000000001,
+      "n": 6301,
+      "policy_modal": "ML-KEM-512",
+      "oracle_modal": "ML-KEM-512",
+      "modal_match": true,
+      "agreement": 1.0,
+      "mean_regret": 0.0
+    },
+    {
+      "lo": 0.7000000000000001,
+      "hi": 0.8,
+      "n": 3674,
+      "policy_modal": "ML-KEM-768",
+      "oracle_modal": "ML-KEM-768",
+      "modal_match": true,
+      "agreement": 0.9784975503538378,
+      "mean_regret": 9.423520325842159e-05
+    },
+    {
+      "lo": 0.8,
+      "hi": 0.9,
+      "n": 1368,
+      "policy_modal": "ML-KEM-768",
+      "oracle_modal": "ML-KEM-768",
+      "modal_match": true,
+      "agreement": 0.8896198830409356,
+      "mean_regret": 0.014624626887848755
+    },
+    {
+      "lo": 0.9,
+      "hi": 1.0,
+      "n": 202,
+      "policy_modal": "rekey-now",
+      "oracle_modal": "ML-KEM-1024",
+      "modal_match": false,
+      "agreement": 0.46534653465346537,
+      "mean_regret": 0.050409399773064946
+    }
+  ],
+  "jitter": [
+    {
+      "jitter": 0.05,
+      "flip_rate": 0.001515625,
+      "unjustified_rate": 0.00134375,
+      "per_action": {
+        "ML-KEM-512": {
+          "n": 7278,
+          "flip_rate": 0.0009532151690024732,
+          "unjustified_rate": 0.0008244023083264633
+        },
+        "ML-KEM-768": {
+          "n": 682,
+          "flip_rate": 0.005865102639296188,
+          "unjustified_rate": 0.005865102639296188
+        },
+        "ML-KEM-1024": {
+          "n": 26,
+          "flip_rate": 0.04567307692307692,
+          "unjustified_rate": 0.028846153846153848
+        },
+        "rekey-now": {
+          "n": 14,
+          "flip_rate": 0.0,
+          "unjustified_rate": 0.0
+        }
+      }
+    },
+    {
+      "jitter": 0.1,
+      "flip_rate": 0.0026640625,
+      "unjustified_rate": 0.0018671875,
+      "per_action": {
+        "ML-KEM-512": {
+          "n": 7278,
+          "flip_rate": 0.0014598790876614455,
+          "unjustified_rate": 0.0009016900247320693
+        },
+        "ML-KEM-768": {
+          "n": 682,
+          "flip_rate": 0.012280058651026392,
+          "unjustified_rate": 0.009805718475073314
+        },
+        "ML-KEM-1024": {
+          "n": 26,
+          "flip_rate": 0.0889423076923077,
+          "unjustified_rate": 0.06490384615384616
+        },
+        "rekey-now": {
+          "n": 14,
+          "flip_rate": 0.0,
+          "unjustified_rate": 0.0
+        }
+      }
+    },
+    {
+      "jitter": 0.15,
+      "flip_rate": 0.004,
+      "unjustified_rate": 0.0022578125,
+      "per_action": {
+        "ML-KEM-512": {
+          "n": 7278,
+          "flip_rate": 0.002052418246771091,
+          "unjustified_rate": 0.0010133278373179444
+        },
+        "ML-KEM-768": {
+          "n": 682,
+          "flip_rate": 0.020252932551319647,
+          "unjustified_rate": 0.012554985337243401
+        },
+        "ML-KEM-1024": {
+          "n": 26,
+          "flip_rate": 0.125,
+          "unjustified_rate": 0.08173076923076923
+        },
+        "rekey-now": {
+          "n": 14,
+          "flip_rate": 0.0,
+          "unjustified_rate": 0.0
+        }
+      }
+    }
+  ],
+  "margins": {
+    "per_action": {
+      "ML-KEM-512": {
+        "n": 36228,
+        "recall": 0.9981229987854698,
+        "median_margin": 1.0,
+        "fragile_share": 0.0011061946902654867
+      },
+      "ML-KEM-768": {
+        "n": 3565,
+        "recall": 0.944179523141655,
+        "median_margin": 0.9959436655044556,
+        "fragile_share": 0.0112893642305407
+      },
+      "ML-KEM-1024": {
+        "n": 146,
+        "recall": 0.5547945205479452,
+        "median_margin": 0.8897557854652405,
+        "fragile_share": 0.0
+      },
+      "rekey-now": {
+        "n": 61,
+        "recall": 1.0,
+        "median_margin": 0.9997785091400146,
+        "fragile_share": 0.0
+      }
+    },
+    "macro_recall": 0.8742742606187675,
+    "fragile_share": 0.0019663204598164767
+  },
+  "fragile_margin_threshold": 0.1
+}

@@ -31,7 +31,7 @@ from stable_baselines3 import PPO  # noqa: E402
 from client.rl_agent.vpn_env import (  # noqa: E402
     CONN_TYPE, CPU_LOAD, RAM_AVAIL, STATE_DIM, THREAT, TIME_SINCE_REKEY,
     VPNEnv, action_rewards, action_rewards_batch, optimal_action,
-    optimal_action_batch,
+    optimal_action_batch, security_need_batch,
 )
 from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
 
@@ -115,6 +115,29 @@ def balanced_states(per_class: int = 1500, seed: int = 0,
     return np.concatenate([np.array(p[:per_class]) for p in pools]).astype(np.float32)
 
 
+def high_need_states(n: int = 4000, seed: int = 0, need_floor: float = 0.90,
+                     batch: int = 400_000) -> np.ndarray:
+    """States where security_need >= `need_floor`, by rejection sampling.
+
+    Week 3's verification found the policy's one real remaining defect lives
+    here: above need 0.90 it switches from ML-KEM-1024 to rekey-now at
+    resource pressure ~0.35 when the true crossover is ~0.50, so it is
+    confidently wrong across that band. The band is ~0.5% of a uniform
+    sample, which is why every Week 2 aggregate — 99.3% agreement, 0.0007
+    regret — stayed clean while it was broken. Scoring it explicitly is what
+    stops that from happening again.
+    """
+    rng = np.random.default_rng(seed)
+    kept: list[np.ndarray] = []
+    total = 0
+    while total < n:
+        cand = rng.uniform(0.0, 1.0, size=(batch, STATE_DIM)).astype(np.float32)
+        hit = cand[security_need_batch(cand) >= need_floor]
+        kept.append(hit)
+        total += len(hit)
+    return np.concatenate(kept)[:n]
+
+
 def _probs(model: PPO, states: np.ndarray) -> np.ndarray:
     import torch
     obs, _ = model.policy.obs_to_tensor(states)
@@ -122,7 +145,8 @@ def _probs(model: PPO, states: np.ndarray) -> np.ndarray:
         return model.policy.get_distribution(obs).distribution.probs.cpu().numpy()
 
 
-def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray) -> dict:
+def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray,
+                   high_need: np.ndarray | None = None) -> dict:
     """The bundle Week 2 is judged on.
 
     No single number here is sufficient on its own, and each one catches a
@@ -148,7 +172,7 @@ def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray) -> dic
         for i, name in enumerate(ACTION_NAMES)
     }
 
-    return {
+    out = {
         "macro_recall": float(np.mean(list(recall.values()))),
         "recall": recall,
         "regret": regret,
@@ -159,6 +183,20 @@ def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray) -> dic
         "action_share": {n: float((chosen_u == i).mean())
                          for i, n in enumerate(ACTION_NAMES)},
     }
+
+    # Optional so the Week 2 callers and tests keep working unchanged; the
+    # sweep passes it because it is the metric Week 3 selects on.
+    if high_need is not None:
+        ph = _probs(model, high_need)
+        chosen_h = ph.argmax(axis=1)
+        rewards_h = action_rewards_batch(high_need)
+        best_h = rewards_h.argmax(axis=1)
+        idx_h = np.arange(len(high_need))
+        out["high_need_agreement"] = float((chosen_h == best_h).mean())
+        out["high_need_regret"] = float(
+            (rewards_h[idx_h, best_h] - rewards_h[idx_h, chosen_h]).mean())
+
+    return out
 
 
 def action_report(model: PPO, states: np.ndarray) -> dict:
