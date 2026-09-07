@@ -676,6 +676,103 @@ diagnosed, an ablation showing the obvious fix does not work, a
 contract-preserving mitigation shipped, and the real fix put in front of the
 Week 4 checkpoint where the interface decision belongs.
 
+## Week 4 (Member 3 track, 2026-09-07) — closing the checkpoint before Member 1's Rust port starts
+
+The assigned task (`TEAM_TIMELINE_PROPOSAL.md`) — export the trained policy
+to ONNX, verify parity, sync the interface with Member 1 — was already done:
+it shipped in Week 2/3 as "pulled forward from Week 4" (see above) and was
+re-verified this session (parity `max|logit diff| = 7.629e-06`, 63/63 argmax
+agreement, manifest digests current). What was left is the other half of
+Week 4, Section 6's own framing: *"everyone re-confirms the contracts held up
+under actual implementation."* Three things the codebase itself had already
+flagged as belonging here.
+
+### Bugs found and fixed before the freeze, not after it
+
+A review pass over the Week 3 diff surfaced two bugs inside
+`client/rl_agent/decision_gate.py` — the exact module Member 1 is about to
+transliterate into Rust. Finding these now is a diff; finding them after the
+port would have been two fixes in two languages.
+
+- **Stale confirm-streak survives an escalation.** After a rekey escalates
+  `in_force` to a stronger algorithm, the `_candidate`/`_streak` counters
+  from whatever challenger was building against the *old* incumbent were
+  left in place. If that challenger reappeared on the very next tick, its
+  streak looked one tick from confirming instead of three, and could
+  downgrade the algorithm the escalation had just raised — a direct
+  violation of the module's own stated invariant. Reproduced as a failing
+  test first (`test_escalation_resets_the_confirm_streak`, confirmed to fail
+  against the pre-fix code with `reason='challenger confirmed for 3 ticks'`
+  after a single real post-escalation tick), then fixed by resetting the
+  streak counters at the point of escalation. `contracts/decision_gate_vectors.json`
+  is byte-identical after the fix — none of the eight shipped cases happened
+  to exercise this sequence, so Member 1's existing port-verification target
+  is unaffected; the new test is now part of what a correct Rust port has to
+  reproduce.
+- **Escalation-delay measurement undercounted its own sample.** In
+  `simulate()`, `pending_since[i]` was cleared and then read in the same
+  loop iteration, in that order — so a delay was recorded only on the rare
+  tick where clearing didn't already null it out (50 of 1613 available
+  samples in a repro run). Fixed by recording the delay before refreshing
+  the pending state. Re-ran the sizing measurement afterward: the headline
+  numbers `INTEGRATION.md` quotes (median 2 ticks / p95 4 ticks, at the
+  default `+/-0.05` noise and `confirm_ticks=3`) are unchanged — they were
+  under-sampled, not wrong. Other configurations' p95 shifted somewhat now
+  that the estimator sees the real sample (e.g. `+/-0.10` noise: median moved
+  0 → 2 ticks); the full diff is in `client/rl_agent/models/decision_gate_sizing.json`.
+- **`contracts/INTEGRATION.md`** stated a rekey happens "without changing
+  strength" six lines above the section documenting that it does, by
+  default, escalate. Reworded to point at that section instead of
+  contradicting it.
+
+### Two decisions written up for Member 2 (and the team), not resolved unilaterally
+
+`contracts/DECISIONS.md` (new) carries both in full, with the measured
+trade-offs and a direct ask:
+
+1. **`REKEY_ESCALATES`** — sign-off on the Week 3 amendment to the Week 2
+   rekey semantics (approve as shipped / reject / request a tighter margin
+   on the escalation path).
+2. **The ML-KEM-1024 dead band's actual fix**, as opposed to the mitigation
+   already shipped. The reward function can't charge a rekey for leaving a
+   weak algorithm in place because the environment tracks the in-force
+   algorithm nowhere, not even internally — confirmed by reading
+   `VPNEnv._evolve_state`, which mutates `TIME_SINCE_REKEY` and `THREAT` on a
+   rekey but has no equivalent state for "which algorithm is this." Two
+   options are written up: give the reward that memory (the clean fix, but
+   it touches the oracle every other Week 1-3 measurement is defined against,
+   and likely means retraining and re-exporting the ONNX policy in the same
+   week Member 1 starts building against it), or a contract-preserving
+   reward penalty keyed on the same `security_need > 0.90` threshold already
+   used elsewhere in the codebase (a calibrated band-aid, not the fix, but
+   costs nothing else). Recommendation: ship the patch now if a training-side
+   improvement is wanted at all, since the escalation rule above already
+   recovers most of the practical harm, and save the clean fix for a
+   deliberate retrain cycle rather than one landing mid-freeze.
+
+As housekeeping for decision 2 specifically: `train.py`'s
+`MIN_HIGH_NEED_AGREEMENT` promotion gate was recalibrated from 0.75 (set
+against a comment claiming a 0.64 baseline that no recorded run — including
+the actual Week 2/3 runs in `models/sweep_results_week3.json`, which top out
+at 0.551 — has ever matched) down to 0.45, matching the floor
+`tests/test_phase4.py` already pins the defect at. The old value made
+`eligible` permanently empty in `summarise()`, and its
+`pool = eligible or results` fallback silently disabled the other two
+promotion gates (`decisiveness`, `mlkem1024_share`) along with it — not a
+policy call, just a threshold that had never once been checked against the
+data it was supposed to gate.
+
+### Status against the Week 4 mandate
+
+The literal task (ONNX export, parity, sync) was complete before the week
+began. What the week actually needed — re-confirming the contracts held up,
+per Section 6 — is done: two real bugs in the module Member 1 is about to
+port are fixed and test-covered, the one documentation contradiction found is
+corrected, and both open policy questions are written up as concrete,
+measured decisions for the team rather than left as comments in code or
+resolved by fiat. `pytest tests/ -v` — 67/67 (66 prior + the new regression
+test) — and `contracts/manifest.json` regenerated and current.
+
 ## How to reproduce
 
 ```bash

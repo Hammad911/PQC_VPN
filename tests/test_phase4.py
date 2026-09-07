@@ -24,6 +24,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# decision_gate is stdlib-only, so it imports here rather than inside each
+# test. The model-backed tests below still defer their imports: those pull
+# in torch/SB3, which the `model` fixture skips on when unavailable.
+from client.rl_agent.decision_gate import (  # noqa: E402
+    CONFIRM_TICKS, REKEY_COOLDOWN_TICKS, DecisionGate,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = REPO_ROOT / "contracts"
 MODEL_PATH = REPO_ROOT / "client" / "rl_agent" / "models" / "ppo_vpn_agent.zip"
@@ -38,8 +45,6 @@ def test_gate_vectors_replay_against_the_python_source():
     registry: a hand-edit to the JSON, or a change to decision_gate.py without
     a regenerate, fails here rather than at integration.
     """
-    from client.rl_agent.decision_gate import DecisionGate
-
     payload = json.loads((CONTRACTS / "decision_gate_vectors.json").read_text())
     assert payload["cases"], "no cases in the shipped vector file"
 
@@ -66,8 +71,6 @@ def test_gate_constants_in_vectors_match_the_module():
 
 def test_single_tick_flip_does_not_trigger_a_handshake():
     """The whole reason the gate exists: one noisy tick must cost nothing."""
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=0)
     gate.update([0.97, 0.02, 0.005, 0.005])
     d = gate.update([0.02, 0.95, 0.02, 0.01])
@@ -76,8 +79,6 @@ def test_single_tick_flip_does_not_trigger_a_handshake():
 
 
 def test_sustained_challenger_is_confirmed_after_confirm_ticks():
-    from client.rl_agent.decision_gate import CONFIRM_TICKS, DecisionGate
-
     gate = DecisionGate(in_force=0)
     changes = [gate.update([0.02, 0.95, 0.02, 0.01]).change_algorithm
                for _ in range(CONFIRM_TICKS + 1)]
@@ -87,8 +88,6 @@ def test_sustained_challenger_is_confirmed_after_confirm_ticks():
 
 def test_alternating_challengers_never_confirm():
     """Two challengers trading places is noise, not a decision."""
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=0)
     for i in range(10):
         probs = [0.02, 0.95, 0.02, 0.01] if i % 2 else [0.02, 0.02, 0.95, 0.01]
@@ -97,8 +96,6 @@ def test_alternating_challengers_never_confirm():
 
 
 def test_low_margin_challenger_is_rejected_however_long_it_persists():
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=0)
     for _ in range(20):
         assert not gate.update([0.45, 0.52, 0.02, 0.01]).change_algorithm
@@ -106,8 +103,6 @@ def test_low_margin_challenger_is_rejected_however_long_it_persists():
 
 
 def test_rekey_fires_immediately_then_respects_cooldown():
-    from client.rl_agent.decision_gate import REKEY_COOLDOWN_TICKS, DecisionGate
-
     gate = DecisionGate(in_force=1)
     probs = [0.05, 0.10, 0.05, 0.80]
     assert gate.update(probs).rekey
@@ -117,27 +112,41 @@ def test_rekey_fires_immediately_then_respects_cooldown():
 
 
 def test_rekey_escalates_to_the_top_ranked_kem():
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=0, rekey_escalates=True)
     d = gate.update([0.02, 0.10, 0.28, 0.60])
     assert d.rekey and d.in_force == 2
+
+
+def test_escalation_resets_the_confirm_streak():
+    """A streak banked against the pre-escalation incumbent must not carry
+    over. Without resetting it, two ticks favouring a competing algorithm
+    followed by one post-escalation tick would confirm a change after a
+    single tick against the newly-escalated in_force instead of the full
+    `confirm_ticks`, including a one-tick downgrade of the algorithm the
+    escalation just raised."""
+    gate = DecisionGate(in_force=0, rekey_escalates=True)
+    challenger = [0.10, 0.85, 0.02, 0.03]  # builds a streak toward action 1
+    gate.update(challenger)
+    gate.update(challenger)  # streak == CONFIRM_TICKS - 1, uninterrupted
+
+    d = gate.update([0.02, 0.05, 0.28, 0.65])  # rekey escalates in_force to 2
+    assert d.rekey and d.in_force == 2
+
+    d = gate.update(challenger)
+    assert not d.change_algorithm, "stale streak let a challenger confirm in one tick"
+    assert gate.in_force == 2
 
 
 def test_rekey_never_downgrades_the_algorithm_in_force():
     """Escalating during a handshake you are doing anyway is free; downgrading
     on one noisy tick is a security regression, so it must go through the
     confirm-ticks path like any other change."""
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=2, rekey_escalates=True)
     d = gate.update([0.30, 0.05, 0.05, 0.60])
     assert d.rekey and d.in_force == 2
 
 
 def test_rekey_escalation_can_be_disabled_for_week2_semantics():
-    from client.rl_agent.decision_gate import DecisionGate
-
     gate = DecisionGate(in_force=0, rekey_escalates=False)
     d = gate.update([0.02, 0.10, 0.28, 0.60])
     assert d.rekey and d.in_force == 0
@@ -246,10 +255,10 @@ def test_high_need_agreement_does_not_regress_below_measured(model):
     So this floor exists to stop it getting *worse* while that is pending. It
     should be raised, not deleted, once the reward question is settled.
     """
-    from client.rl_agent.evaluate import high_need_states, policy_metrics
+    from client.rl_agent.evaluate import high_need_metrics, high_need_states
 
     states = high_need_states(2000, seed=4244)
-    m = policy_metrics(model, states[:1000], states[:1000], states)
+    m = high_need_metrics(model, states)
     assert m["high_need_agreement"] >= 0.45
 
 

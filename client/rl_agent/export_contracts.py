@@ -157,37 +157,39 @@ def build_state_vector() -> dict:
     }
 
 
+# The tick shapes the scenarios are built from. Named because they were
+# retyped ~15 times below, which meant telling two cases apart was a matter of
+# diffing float literals by eye.
+_AGREE_512 = [0.97, 0.02, 0.005, 0.005]      # in-force ML-KEM-512 wins clearly
+_CHALLENGE_768 = [0.02, 0.95, 0.02, 0.01]    # ML-KEM-768 challenges, wide margin
+_CHALLENGE_1024 = [0.02, 0.02, 0.95, 0.01]   # ML-KEM-1024 challenges, wide margin
+_AMBIGUOUS = [0.45, 0.52, 0.02, 0.01]        # challenger leads by under MIN_MARGIN
+# rekey wins outright. NOTE the KEM mass is not flat (1024 at 0.10 beats 512
+# at 0.05), so under the default rekey_escalates this tick ALSO escalates
+# in-force to ML-KEM-1024 — the cooldown case below exercises both at once.
+_REKEY = [0.05, 0.05, 0.10, 0.80]
+_REKEY_PREFERRING_1024 = [0.02, 0.10, 0.28, 0.60]
+_REKEY_PREFERRING_512 = [0.30, 0.05, 0.05, 0.60]
+
 # Scenario names double as the failure message a Rust test prints, so they say
 # what the tick sequence is exercising rather than "case 3".
 _GATE_SCENARIOS = [
-    ("steady state: policy agrees with the algorithm in force", 0, [
-        [0.97, 0.02, 0.005, 0.005]] * 4),
-    ("single-tick noise spike is absorbed, no handshake", 0, [
-        [0.97, 0.02, 0.005, 0.005],
-        [0.02, 0.95, 0.02, 0.01],
-        [0.97, 0.02, 0.005, 0.005],
-        [0.97, 0.02, 0.005, 0.005]]),
-    ("sustained escalation is confirmed on the third tick", 0, [
-        [0.97, 0.02, 0.005, 0.005],
-        [0.02, 0.95, 0.02, 0.01],
-        [0.02, 0.95, 0.02, 0.01],
-        [0.02, 0.95, 0.02, 0.01],
-        [0.02, 0.95, 0.02, 0.01]]),
-    ("alternating challengers never accumulate a streak", 0, [
-        [0.02, 0.95, 0.02, 0.01],
-        [0.02, 0.02, 0.95, 0.01],
-        [0.02, 0.95, 0.02, 0.01],
-        [0.02, 0.02, 0.95, 0.01]]),
-    ("ambiguous state: margin below threshold blocks the change", 0, [
-        [0.45, 0.52, 0.02, 0.01]] * 5),
-    ("rekey fires immediately, then the cooldown holds", 0, [
-        [0.05, 0.05, 0.10, 0.80],
-        [0.05, 0.05, 0.10, 0.80],
-        [0.05, 0.05, 0.10, 0.80]]),
-    ("rekey escalates to the policy's top-ranked KEM", 0, [
-        [0.02, 0.10, 0.28, 0.60]]),
-    ("rekey never downgrades the algorithm in force", 2, [
-        [0.30, 0.05, 0.05, 0.60]]),
+    ("steady state: policy agrees with the algorithm in force", 0,
+     [_AGREE_512] * 4),
+    ("single-tick noise spike is absorbed, no handshake", 0,
+     [_AGREE_512, _CHALLENGE_768, _AGREE_512, _AGREE_512]),
+    ("sustained escalation is confirmed on the third tick", 0,
+     [_AGREE_512] + [_CHALLENGE_768] * 4),
+    ("alternating challengers never accumulate a streak", 0,
+     [_CHALLENGE_768, _CHALLENGE_1024] * 2),
+    ("ambiguous state: margin below threshold blocks the change", 0,
+     [_AMBIGUOUS] * 5),
+    ("rekey fires immediately, then the cooldown holds", 0,
+     [_REKEY] * 3),
+    ("rekey escalates to the policy's top-ranked KEM", 0,
+     [_REKEY_PREFERRING_1024]),
+    ("rekey never downgrades the algorithm in force", 2,
+     [_REKEY_PREFERRING_512]),
 ]
 
 

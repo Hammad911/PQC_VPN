@@ -30,8 +30,8 @@ import onnx  # noqa: E402
 import onnxruntime as ort  # noqa: E402
 from stable_baselines3 import PPO  # noqa: E402
 
+from client.rl_agent.vpn_env import ACTION_NAMES as _ACTION_NAMES  # noqa: E402
 from client.rl_agent.vpn_env import STATE_DIM  # noqa: E402
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = REPO_ROOT / "client" / "rl_agent" / "models" / "ppo_vpn_agent.zip"
@@ -46,7 +46,6 @@ PARITY_ATOL = 1e-5
 # export can't ship a model of the wrong shape.
 EXPECTED_POLICY_PARAMS = 4932
 
-_ACTION_NAMES = [ACTIVE_ACTIONS[k]["name"] for k in ACTIVE_ACTIONS]
 
 
 class PolicyLogits(nn.Module):
