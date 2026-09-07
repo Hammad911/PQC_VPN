@@ -2,6 +2,8 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 *.zip
 !client/rl_agent/models/**/*.zip
 # Per-run training output (checkpoints + tensorboard): 6.6MB for one sweep, and
@@ -11,5 +13,18 @@ client/rl_agent/models/runs/
 # Root-level checkpoint dumps only (do not ignore client/rl_agent/models/)
 /models/
 *.log
+
+# Rust build output
+target/
+**/target/
+
+# Node.js dependencies and frontend builds
 node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Editor and operating-system files
+.vscode/
 .DS_Store
+Thumbs.db
