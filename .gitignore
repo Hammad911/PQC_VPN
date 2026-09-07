@@ -1,0 +1,19 @@
+# Rust build output
+target/
+**/target/
+
+# Node.js dependencies and frontend builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Environment files that may contain secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.vscode/
+.DS_Store
+Thumbs.db

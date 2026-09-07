@@ -1,0 +1,13 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kem = "0.3.0-pre.0"
+ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
+ml-kem = "0.2.3"
+rand = "0.8"
+sha2 = "0.10"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+zeroize = { version = "1.9", features = ["zeroize_derive"] }
