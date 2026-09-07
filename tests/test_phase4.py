@@ -137,6 +137,45 @@ def test_escalation_resets_the_confirm_streak():
     assert gate.in_force == 2
 
 
+def test_non_escalating_rekey_also_resets_the_confirm_streak():
+    """The fix above only covered the escalating branch. A rekey tick's
+    argmax is rekey-now, not a KEM, whether or not it ends up escalating --
+    the streak building toward a challenger did not get a consecutive tick in
+    its favour either way. Reproduced here with `in_force` already the
+    strongest KEM, so `rekey_escalates=True` has nothing to escalate to and
+    takes the same code path as `rekey_escalates=False`: without the fix, a
+    stale streak survives and confirms one tick later, downgrading `in_force`
+    right after the module's own no-downgrade rekey."""
+    gate = DecisionGate(in_force=2, rekey_escalates=True)
+    challenger = [0.85, 0.02, 0.03, 0.10]  # builds a streak toward action 0
+    gate.update(challenger)
+    gate.update(challenger)  # streak == CONFIRM_TICKS - 1, uninterrupted
+
+    d = gate.update([0.02, 0.03, 0.05, 0.90])  # rekey fires; nothing stronger to escalate to
+    assert d.rekey and not d.change_algorithm and d.in_force == 2
+
+    d = gate.update(challenger)
+    assert not d.change_algorithm, "stale streak let a challenger confirm across a rekey"
+    assert gate.in_force == 2
+
+
+def test_rekey_escalation_disabled_still_resets_the_confirm_streak():
+    """Same gap, hit via the literal contract option `rekey_escalates=False`
+    (one of the two choices `contracts/DECISIONS.md` puts to Member 2) rather
+    than the already-strongest special case above."""
+    gate = DecisionGate(in_force=1, rekey_escalates=False)
+    challenger = [0.02, 0.02, 0.85, 0.11]  # builds a streak toward action 2
+    gate.update(challenger)
+    gate.update(challenger)
+
+    d = gate.update([0.05, 0.05, 0.05, 0.85])  # rekey at whatever is in force
+    assert d.rekey and not d.change_algorithm and d.in_force == 1
+
+    d = gate.update(challenger)
+    assert not d.change_algorithm, "stale streak let a challenger confirm across a rekey"
+    assert gate.in_force == 1
+
+
 def test_rekey_never_downgrades_the_algorithm_in_force():
     """Escalating during a handshake you are doing anyway is free; downgrading
     on one noisy tick is a security regression, so it must go through the

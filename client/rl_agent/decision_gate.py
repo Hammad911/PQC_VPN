@@ -158,10 +158,15 @@ class DecisionGate:
 
         # rekey: fires immediately, subject only to the cooldown.
         if top == REKEY_ACTION_IDX:
-            # A rekey request does not disturb an algorithm change in
-            # progress — they are independent decisions, per the registry's
-            # rekey semantics ("re-run the handshake at the algorithm
-            # currently in force").
+            # The argmax this tick was rekey-now, not a KEM — whatever streak
+            # was building toward a challenger did not get a consecutive tick
+            # in its favour, fired or not, escalating or not, even suppressed
+            # by cooldown. Reset unconditionally: leaving it alive (the
+            # pre-Week-4 bug, and still true for the non-escalating case until
+            # this fix) lets a challenger confirm — including downgrading
+            # in_force — off fewer than confirm_ticks truly-consecutive ticks,
+            # with a rekey quietly skipped over in the middle.
+            self._candidate, self._streak = -1, 0
             if self._rekey_blocked_for == 0:
                 self._rekey_blocked_for = self.rekey_cooldown_ticks
                 reason = REASON_REKEY
@@ -170,13 +175,6 @@ class DecisionGate:
                     if ACTION_SECURITY[best_kem] > ACTION_SECURITY[self.in_force]:
                         self.in_force = best_kem
                         reason = REASON_REKEY_ESCALATED
-                        # A streak banked against the pre-escalation incumbent
-                        # must not carry over: it would let a challenger
-                        # confirm against the new (stronger) in_force after
-                        # fewer than confirm_ticks ticks, including one that
-                        # downgrades it — the one thing this gate promises
-                        # never happens on a single noisy tick.
-                        self._candidate, self._streak = -1, 0
                 return Decision(self.in_force, False, True, reason)
             return Decision(self.in_force, False, False, REASON_REKEY_SUPPRESSED)
 

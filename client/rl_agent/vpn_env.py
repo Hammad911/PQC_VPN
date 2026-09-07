@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # ACTION_NAMES / N_ACTIONS / KEM_ACTIONS are re-exported, not used here: every
 # RL module already imports this one, so this is where they are reached from.
 from client.vpn_daemon.algo_registry import (  # noqa: E402,F401
-    ACTION_NAMES, ACTION_TO_ALGO_KEY, ACTIVE_ACTIONS, KEM_ACTIONS, N_ACTIONS,
-    REKEY_ACTION_IDX,
+    ACTION_NAMES, ACTION_SECURITY as _ACTION_SECURITY, ACTION_TO_ALGO_KEY,
+    ACTIVE_ACTIONS, KEM_ACTIONS, N_ACTIONS, REKEY_ACTION_IDX,
 )
 
 STATE_DIM = 7
@@ -35,11 +35,11 @@ MAX_CPU_COST = max(a["cpu_cost"] for a in ACTIVE_ACTIONS.values())
 # The index-ordered action tables live in algo_registry.py (the contract's
 # declared source of truth) and are re-exported here because every RL module
 # already imports this one. Only the security ranks need a numpy form, for the
-# vectorised reward and shortfall paths.
-ACTION_SECURITY = np.array(
-    [ACTIVE_ACTIONS[k]["security"] for k in ACTION_TO_ALGO_KEY.values()],
-    dtype=np.float64,
-)
+# vectorised reward and shortfall paths — cast the registry's own list rather
+# than re-deriving it, or this and decision_gate.py's list form can silently
+# diverge (the exact drift the registry's module docstring says it exists to
+# prevent).
+ACTION_SECURITY = np.array(_ACTION_SECURITY, dtype=np.float64)
 
 # How `_high_need_initial_state` draws the resource dimensions.
 #   "low"    — the Week 2 behaviour: low CPU, high free RAM, so paying for a
@@ -350,11 +350,12 @@ class VPNEnv(gym.Env):
     def advance(self, action_idx: int) -> np.ndarray:
         """Advance the simulation one tick and return the new observation only.
 
-        `step` scores the action against all four alternatives before evolving;
-        a caller measuring decision *stability* rather than return throws that
-        reward away. Same transition, same RNG draws — `_evolve_state` is the
-        only consumer of the generator — so trajectories are identical to
-        stepping, without paying for a reward nobody reads.
+        `step` also scores the action taken against the reward model before
+        evolving; a caller measuring decision *stability* rather than return
+        throws that reward away. Same transition, same RNG draws —
+        `_evolve_state` is the only consumer of the generator — so
+        trajectories are identical to stepping, without paying for a reward
+        nobody reads.
         """
         assert self.action_space.contains(action_idx)
         self._state = self._evolve_state(action_idx)
