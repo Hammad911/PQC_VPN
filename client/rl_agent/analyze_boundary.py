@@ -28,13 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from stable_baselines3 import PPO  # noqa: E402
 
 from client.rl_agent.vpn_env import (  # noqa: E402
+    ACTION_NAMES as _ACTION_NAMES,
     CPU_LOAD, RAM_AVAIL, LATENCY, UPLOAD, CONN_TYPE, TIME_SINCE_REKEY, THREAT,
     optimal_action_batch,
 )
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "ppo_vpn_agent.zip"
-_ACTION_NAMES = [ACTIVE_ACTIONS[k]["name"] for k in ACTIVE_ACTIONS]
 
 # Kept for continuity with the Week 1 write-up, but see the WARNING printed
 # alongside its sweep: this state was believed to sit inside ML-KEM-768's

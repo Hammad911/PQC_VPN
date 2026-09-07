@@ -22,16 +22,23 @@ import numpy as np
 from gymnasium import spaces
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
+# ACTION_NAMES / N_ACTIONS / KEM_ACTIONS are re-exported, not used here: every
+# RL module already imports this one, so this is where they are reached from.
+from client.vpn_daemon.algo_registry import (  # noqa: E402,F401
+    ACTION_NAMES, ACTION_TO_ALGO_KEY, ACTIVE_ACTIONS, KEM_ACTIONS, N_ACTIONS,
+    REKEY_ACTION_IDX,
+)
 
 STATE_DIM = 7
 MAX_CPU_COST = max(a["cpu_cost"] for a in ACTIVE_ACTIONS.values())
 
-# action index (0..N-1, contiguous, gym-friendly) -> algo_registry key
-_ACTION_TO_ALGO_KEY = {i: k for i, k in enumerate(ACTIVE_ACTIONS.keys())}
-_REKEY_ACTION_IDX = next(
-    i for i, k in _ACTION_TO_ALGO_KEY.items()
-    if ACTIVE_ACTIONS[k]["name"] == "rekey-now"
+# The index-ordered action tables live in algo_registry.py (the contract's
+# declared source of truth) and are re-exported here because every RL module
+# already imports this one. Only the security ranks need a numpy form, for the
+# vectorised reward and shortfall paths.
+ACTION_SECURITY = np.array(
+    [ACTIVE_ACTIONS[k]["security"] for k in ACTION_TO_ALGO_KEY.values()],
+    dtype=np.float64,
 )
 
 # How `_high_need_initial_state` draws the resource dimensions.
@@ -45,6 +52,18 @@ CURRICULUM_PRESSURE_MODES = ("low", "spread")
 # state vector indices, matching StateObserver.read_state() ordering
 CPU_LOAD, RAM_AVAIL, LATENCY, UPLOAD, CONN_TYPE, TIME_SINCE_REKEY, THREAT = range(7)
 
+# Field names in index order. Beside the indices so the two move together —
+# a reordering that leaves a hand-typed name list behind mislabels every
+# report that prints one.
+STATE_FIELD_NAMES = ("CPU_LOAD", "RAM_AVAIL", "LATENCY", "UPLOAD",
+                     "CONN_TYPE", "TIME_SINCE_REKEY", "THREAT")
+
+# Which dimensions are noisy sensor readings, and so are the ones an
+# observation-noise model may perturb. CONN_TYPE is a discrete interface
+# classification and TIME_SINCE_REKEY a local clock; neither is measured, so
+# neither carries measurement noise.
+SENSOR_DIMS = (CPU_LOAD, RAM_AVAIL, LATENCY, UPLOAD, THREAT)
+
 
 def action_reward(state: np.ndarray, action_idx: int) -> float:
     """Reward for taking `action_idx` in `state`.
@@ -54,7 +73,7 @@ def action_reward(state: np.ndarray, action_idx: int) -> float:
     baselines in evaluate.py are scored by exactly the same function the agent
     is trained on, instead of a copy that can drift away from it.
     """
-    algo_key = _ACTION_TO_ALGO_KEY[action_idx]
+    algo_key = ACTION_TO_ALGO_KEY[action_idx]
     algo = ACTIVE_ACTIONS[algo_key]
 
     security_need = np.clip(
@@ -96,7 +115,7 @@ def action_reward(state: np.ndarray, action_idx: int) -> float:
 def action_rewards(state: np.ndarray) -> np.ndarray:
     """Reward for every action in `state`, in action-index order."""
     return np.array(
-        [action_reward(state, a) for a in range(len(_ACTION_TO_ALGO_KEY))],
+        [action_reward(state, a) for a in range(len(ACTION_TO_ALGO_KEY))],
         dtype=np.float64,
     )
 
@@ -141,8 +160,8 @@ def action_rewards_batch(states: np.ndarray) -> np.ndarray:
     pressure = resource_pressure_batch(states)
 
     columns = []
-    for action_idx in range(len(_ACTION_TO_ALGO_KEY)):
-        algo = ACTIVE_ACTIONS[_ACTION_TO_ALGO_KEY[action_idx]]
+    for action_idx in range(len(ACTION_TO_ALGO_KEY)):
+        algo = ACTIVE_ACTIONS[ACTION_TO_ALGO_KEY[action_idx]]
         if algo["name"] == "rekey-now":
             urgency = 0.5 * states[:, THREAT] + 0.5 * states[:, TIME_SINCE_REKEY]
             columns.append(urgency - 0.5 * (1.0 - urgency) - 0.3)
@@ -152,6 +171,28 @@ def action_rewards_batch(states: np.ndarray) -> np.ndarray:
             columns.append(1.0 - 3.0 * shortfall - cost_penalty)
 
     return np.stack(columns, axis=1)
+
+
+def security_shortfall_batch(need: np.ndarray, actions: np.ndarray) -> np.ndarray:
+    """How far short of `need` the security of `actions` falls, per element.
+
+    The same `max(0, need - security)` term `action_rewards_batch` penalises,
+    exposed so the decision-gate sizing can measure delivered security without
+    hand-copying it. If the reward is retuned at the Week 4 checkpoint, the
+    shortfall numbers that justify `REKEY_ESCALATES` move with it instead of
+    going quietly stale.
+    """
+    return np.maximum(0.0, np.asarray(need, dtype=np.float64)
+                      - ACTION_SECURITY[np.asarray(actions)])
+
+
+def uniform_states(n: int, rng: np.random.Generator) -> np.ndarray:
+    """`n` states drawn uniformly over the observation box.
+
+    Takes a Generator rather than a seed so a caller that draws more from the
+    same stream afterwards (the jitter check does) stays reproducible.
+    """
+    return rng.uniform(0.0, 1.0, size=(n, STATE_DIM)).astype(np.float32)
 
 
 def optimal_action_batch(states: np.ndarray) -> np.ndarray:
@@ -200,7 +241,7 @@ class VPNEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(STATE_DIM,), dtype=np.float32
         )
-        self.action_space = spaces.Discrete(len(_ACTION_TO_ALGO_KEY))
+        self.action_space = spaces.Discrete(len(ACTION_TO_ALGO_KEY))
         self._rng = np.random.default_rng(seed)
         self._state = None
         self._t = 0
@@ -267,7 +308,7 @@ class VPNEnv(gym.Env):
         if self._rng.random() < 0.05:
             s[THREAT] = np.clip(s[THREAT] + self._rng.uniform(0.4, 1.0), 0.0, 1.0)
 
-        algo_key = _ACTION_TO_ALGO_KEY[action_idx]
+        algo_key = ACTION_TO_ALGO_KEY[action_idx]
         cpu_cost = ACTIVE_ACTIONS[algo_key]["cpu_cost"] / MAX_CPU_COST
         s[CPU_LOAD] = np.clip(s[CPU_LOAD] + 0.1 * cpu_cost, 0.0, 1.0)
 
@@ -286,7 +327,7 @@ class VPNEnv(gym.Env):
                 0.0, 1.0,
             )
 
-        if action_idx == _REKEY_ACTION_IDX:
+        if action_idx == REKEY_ACTION_IDX:
             s[TIME_SINCE_REKEY] = 0.0
             s[THREAT] = max(0.0, s[THREAT] - 0.5)
         else:
@@ -306,6 +347,20 @@ class VPNEnv(gym.Env):
         self._t = 0
         return self._state, {}
 
+    def advance(self, action_idx: int) -> np.ndarray:
+        """Advance the simulation one tick and return the new observation only.
+
+        `step` scores the action against all four alternatives before evolving;
+        a caller measuring decision *stability* rather than return throws that
+        reward away. Same transition, same RNG draws — `_evolve_state` is the
+        only consumer of the generator — so trajectories are identical to
+        stepping, without paying for a reward nobody reads.
+        """
+        assert self.action_space.contains(action_idx)
+        self._state = self._evolve_state(action_idx)
+        self._t += 1
+        return self._state
+
     def step(self, action_idx: int):
         assert self.action_space.contains(action_idx)
         reward = self._reward(self._state, action_idx)
@@ -314,6 +369,6 @@ class VPNEnv(gym.Env):
 
         terminated = False
         truncated = self._t >= self.episode_len
-        info = {"algo": ACTIVE_ACTIONS[_ACTION_TO_ALGO_KEY[action_idx]]["name"]}
+        info = {"algo": ACTIVE_ACTIONS[ACTION_TO_ALGO_KEY[action_idx]]["name"]}
 
         return self._state, reward, terminated, truncated, info

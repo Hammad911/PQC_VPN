@@ -29,15 +29,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from stable_baselines3 import PPO  # noqa: E402
 
 from client.rl_agent.vpn_env import (  # noqa: E402
-    CONN_TYPE, CPU_LOAD, RAM_AVAIL, STATE_DIM, THREAT, TIME_SINCE_REKEY,
-    VPNEnv, action_rewards, action_rewards_batch, optimal_action,
-    optimal_action_batch, security_need_batch,
+    ACTION_NAMES, CONN_TYPE, N_ACTIONS, REKEY_ACTION_IDX,
+    STATE_DIM, THREAT, TIME_SINCE_REKEY, VPNEnv, action_rewards,
+    action_rewards_batch, optimal_action, optimal_action_batch,
+    security_need_batch,
 )
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "ppo_vpn_agent.zip"
-ACTION_NAMES = [ACTIVE_ACTIONS[k]["name"] for k in ACTIVE_ACTIONS]
-N_ACTIONS = len(ACTION_NAMES)
+
+# The band Week 3's verification isolated the remaining defect in. Named once
+# because the sampler, the metric and the test that pins it all have to agree
+# on where "high need" starts.
+HIGH_NEED_FLOOR = 0.90
 
 
 # ---------------------------------------------------------------- baselines
@@ -58,7 +61,7 @@ def rule_based_policy(state: np.ndarray) -> int:
     have done the job' control that the RL agent has to beat to justify
     itself."""
     if state[THREAT] > 0.7 or state[TIME_SINCE_REKEY] > 0.9:
-        return N_ACTIONS - 1                      # rekey-now
+        return REKEY_ACTION_IDX
     if state[THREAT] > 0.4 or state[CONN_TYPE] > 0.75:
         return 1                                  # ML-KEM-768
     return 0                                      # ML-KEM-512
@@ -115,7 +118,8 @@ def balanced_states(per_class: int = 1500, seed: int = 0,
     return np.concatenate([np.array(p[:per_class]) for p in pools]).astype(np.float32)
 
 
-def high_need_states(n: int = 4000, seed: int = 0, need_floor: float = 0.90,
+def high_need_states(n: int = 4000, seed: int = 0,
+                     need_floor: float = HIGH_NEED_FLOOR,
                      batch: int = 400_000) -> np.ndarray:
     """States where security_need >= `need_floor`, by rejection sampling.
 
@@ -138,15 +142,51 @@ def high_need_states(n: int = 4000, seed: int = 0, need_floor: float = 0.90,
     return np.concatenate(kept)[:n]
 
 
-def _probs(model: PPO, states: np.ndarray) -> np.ndarray:
+def policy_probs(model: PPO, states: np.ndarray) -> np.ndarray:
+    """Action probabilities for an (N, 7) batch.
+
+    The one place this three-line SB3 incantation lives. It had drifted into
+    five near-copies that disagreed on whether to `.cpu()` and whether to cast
+    the input, which meant a device or dtype fix had five places to reach.
+    """
     import torch
-    obs, _ = model.policy.obs_to_tensor(states)
+    obs, _ = model.policy.obs_to_tensor(np.asarray(states, dtype=np.float32))
     with torch.no_grad():
         return model.policy.get_distribution(obs).distribution.probs.cpu().numpy()
 
 
-def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray,
-                   high_need: np.ndarray | None = None) -> dict:
+def regret_batch(rewards: np.ndarray, chosen: np.ndarray,
+                 best: np.ndarray | None = None) -> np.ndarray:
+    """Per-state reward given up by taking `chosen` instead of the optimum.
+
+    Takes the already-built (N, n_actions) reward matrix rather than states,
+    because every caller needs the matrix for something else too and building
+    it twice is the expensive half.
+    """
+    if best is None:
+        best = rewards.argmax(axis=1)
+    idx = np.arange(len(rewards))
+    return rewards[idx, best] - rewards[idx, chosen]
+
+
+def high_need_metrics(model: PPO, high_need: np.ndarray) -> dict:
+    """Agreement and regret restricted to the high-security-need band.
+
+    Its own function rather than a branch inside `policy_metrics`: the band is
+    ~0.5% of a uniform sample, so it is the one metric that does not follow
+    from the others, and a caller that wants only it should not have to supply
+    two unrelated evaluation sets to get it.
+    """
+    rewards = action_rewards_batch(high_need)
+    chosen = policy_probs(model, high_need).argmax(axis=1)
+    best = rewards.argmax(axis=1)
+    return {
+        "high_need_agreement": float((chosen == best).mean()),
+        "high_need_regret": float(regret_batch(rewards, chosen, best).mean()),
+    }
+
+
+def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray) -> dict:
     """The bundle Week 2 is judged on.
 
     No single number here is sufficient on its own, and each one catches a
@@ -157,14 +197,13 @@ def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray,
     over-large entropy bonus (which raises the probability ceiling without
     improving any decision).
     """
-    pu = _probs(model, uniform)
+    pu = policy_probs(model, uniform)
     chosen_u = pu.argmax(axis=1)
     rewards_u = action_rewards_batch(uniform)
     best_u = rewards_u.argmax(axis=1)
-    idx = np.arange(len(uniform))
-    regret = float((rewards_u[idx, best_u] - rewards_u[idx, chosen_u]).mean())
+    regret = float(regret_batch(rewards_u, chosen_u, best_u).mean())
 
-    pb = _probs(model, balanced)
+    pb = policy_probs(model, balanced)
     chosen_b = pb.argmax(axis=1)
     best_b = optimal_action_batch(balanced)
     recall = {
@@ -172,7 +211,7 @@ def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray,
         for i, name in enumerate(ACTION_NAMES)
     }
 
-    out = {
+    return {
         "macro_recall": float(np.mean(list(recall.values()))),
         "recall": recall,
         "regret": regret,
@@ -184,20 +223,6 @@ def policy_metrics(model: PPO, uniform: np.ndarray, balanced: np.ndarray,
                          for i, n in enumerate(ACTION_NAMES)},
     }
 
-    # Optional so the Week 2 callers and tests keep working unchanged; the
-    # sweep passes it because it is the metric Week 3 selects on.
-    if high_need is not None:
-        ph = _probs(model, high_need)
-        chosen_h = ph.argmax(axis=1)
-        rewards_h = action_rewards_batch(high_need)
-        best_h = rewards_h.argmax(axis=1)
-        idx_h = np.arange(len(high_need))
-        out["high_need_agreement"] = float((chosen_h == best_h).mean())
-        out["high_need_regret"] = float(
-            (rewards_h[idx_h, best_h] - rewards_h[idx_h, chosen_h]).mean())
-
-    return out
-
 
 def action_report(model: PPO, states: np.ndarray) -> dict:
     """Where the policy's choices sit relative to the greedy optimum, and how
@@ -206,8 +231,7 @@ def action_report(model: PPO, states: np.ndarray) -> dict:
     best = np.array([optimal_action(s) for s in states])
     rewards = np.array([action_rewards(s) for s in states])
 
-    idx = np.arange(len(states))
-    gap = rewards[idx, best] - rewards[idx, chosen]
+    gap = regret_batch(rewards, chosen, best)
 
     return {
         "chosen": chosen,

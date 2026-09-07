@@ -39,14 +39,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
-
-ACTION_NAMES = [a["name"] for a in ACTIVE_ACTIONS.values()]
-REKEY_ACTION = ACTION_NAMES.index("rekey-now")
-# Security rank of each action, from the registry. Used only to ensure a rekey
-# never *lowers* the algorithm in force.
-ACTION_SECURITY = [a["security"] for a in ACTIVE_ACTIONS.values()]
-KEM_ACTIONS = [i for i, a in enumerate(ACTIVE_ACTIONS.values()) if a["name"] != "rekey-now"]
+# The action tables come from the registry, which defines the index ordering
+# the frozen contract guarantees. Importing them from there rather than
+# re-deriving them keeps this module on the stdlib — no numpy, no gymnasium —
+# which is the property that makes the Rust port a transliteration.
+# ACTION_SECURITY is used only to ensure a rekey never *lowers* the algorithm
+# in force.
+from client.vpn_daemon.algo_registry import (  # noqa: E402
+    ACTION_NAMES, ACTION_SECURITY, KEM_ACTIONS, REKEY_ACTION_IDX,
+)
 
 # One tick = one agent loop = 5 seconds (proposal section 3.3).
 TICK_SECONDS = 5
@@ -98,6 +99,20 @@ REKEY_COOLDOWN_TICKS = 12          # 60 seconds
 # regression, so downgrades still have to go through the confirm-ticks path.
 REKEY_ESCALATES = True
 
+# Why the gate decided what it did, for the client's session log. Fixed
+# strings, not f-strings: `update` runs once per session per tick, and the
+# module's whole claim is that a tick costs a few comparisons and no
+# allocation. A Rust port makes these `&'static str`. The varying quantities
+# a formatted message would have carried (the margin, the streak position)
+# are already in the caller's hands — it passed the probabilities in.
+REASON_AGREES = "policy agrees with in-force"
+REASON_LOW_MARGIN = "challenger margin below the minimum"
+REASON_ON_STREAK = "challenger on streak, not yet confirmed"
+REASON_CONFIRMED = "challenger confirmed for the full streak"
+REASON_REKEY = "rekey requested and cooldown clear"
+REASON_REKEY_ESCALATED = "rekey requested; escalating to the policy's top-ranked KEM"
+REASON_REKEY_SUPPRESSED = "rekey suppressed, cooldown still running"
+
 
 @dataclass
 class Decision:
@@ -142,34 +157,37 @@ class DecisionGate:
         top = max(range(len(probs)), key=lambda i: probs[i])
 
         # rekey: fires immediately, subject only to the cooldown.
-        if top == REKEY_ACTION:
+        if top == REKEY_ACTION_IDX:
             # A rekey request does not disturb an algorithm change in
             # progress — they are independent decisions, per the registry's
             # rekey semantics ("re-run the handshake at the algorithm
             # currently in force").
             if self._rekey_blocked_for == 0:
                 self._rekey_blocked_for = self.rekey_cooldown_ticks
-                reason = "rekey requested and cooldown clear"
+                reason = REASON_REKEY
                 if self.rekey_escalates:
                     best_kem = max(KEM_ACTIONS, key=lambda i: probs[i])
                     if ACTION_SECURITY[best_kem] > ACTION_SECURITY[self.in_force]:
                         self.in_force = best_kem
-                        reason = ("rekey requested; escalating to the policy's "
-                                  "top-ranked KEM for the handshake")
+                        reason = REASON_REKEY_ESCALATED
+                        # A streak banked against the pre-escalation incumbent
+                        # must not carry over: it would let a challenger
+                        # confirm against the new (stronger) in_force after
+                        # fewer than confirm_ticks ticks, including one that
+                        # downgrades it — the one thing this gate promises
+                        # never happens on a single noisy tick.
+                        self._candidate, self._streak = -1, 0
                 return Decision(self.in_force, False, True, reason)
-            return Decision(self.in_force, False, False,
-                            f"rekey suppressed, {self._rekey_blocked_for} ticks of cooldown left")
+            return Decision(self.in_force, False, False, REASON_REKEY_SUPPRESSED)
 
         # algorithm choice: needs a streak and a margin.
         if top == self.in_force:
             self._candidate, self._streak = -1, 0
-            return Decision(self.in_force, False, False, "policy agrees with in-force")
+            return Decision(self.in_force, False, False, REASON_AGREES)
 
-        margin = probs[top] - probs[self.in_force]
-        if margin < self.min_margin:
+        if probs[top] - probs[self.in_force] < self.min_margin:
             self._candidate, self._streak = -1, 0
-            return Decision(self.in_force, False, False,
-                            f"challenger margin {margin:.3f} below {self.min_margin:.2f}")
+            return Decision(self.in_force, False, False, REASON_LOW_MARGIN)
 
         if top == self._candidate:
             self._streak += 1
@@ -179,11 +197,9 @@ class DecisionGate:
         if self._streak >= self.confirm_ticks:
             self.in_force = top
             self._candidate, self._streak = -1, 0
-            return Decision(self.in_force, True, False,
-                            f"challenger confirmed for {self.confirm_ticks} ticks")
+            return Decision(self.in_force, True, False, REASON_CONFIRMED)
 
-        return Decision(self.in_force, False, False,
-                        f"challenger on streak {self._streak}/{self.confirm_ticks}")
+        return Decision(self.in_force, False, False, REASON_ON_STREAK)
 
 
 # ------------------------------------------------------- sizing measurement
@@ -191,7 +207,7 @@ class DecisionGate:
 def simulate(noise: float = 0.05, n_sessions: int = 400, ticks: int = 240,
              seed: int = 21, confirm_ticks: int = CONFIRM_TICKS,
              rekey_escalates: bool = REKEY_ESCALATES, curriculum: float = 0.0,
-             cpu_relax: float = 0.0):
+             model=None):
     """Measure what the gate costs and what it buys, on noisy trajectories.
 
     Both sides matter and reporting only one would be misleading: the gate
@@ -206,48 +222,56 @@ def simulate(noise: float = 0.05, n_sessions: int = 400, ticks: int = 240,
     `ticks=240` is a 20-minute session at 5s/tick.
     """
     import numpy as np
-    import torch
-    from stable_baselines3 import PPO
 
-    from client.rl_agent.vpn_env import VPNEnv, optimal_action_batch, security_need_batch
+    from client.rl_agent.evaluate import policy_probs
+    from client.rl_agent.vpn_env import (
+        SENSOR_DIMS, VPNEnv, action_rewards_batch, security_need_batch,
+        security_shortfall_batch,
+    )
 
-    model_path = Path(__file__).resolve().parent / "models" / "ppo_vpn_agent.zip"
-    model = PPO.load(model_path, device="cpu")
+    if model is None:
+        model = _load_model()
     rng = np.random.default_rng(seed)
 
-    envs = [VPNEnv(episode_len=ticks, seed=seed + s, curriculum=curriculum,
-                   cpu_relax=cpu_relax) for s in range(n_sessions)]
+    envs = [VPNEnv(episode_len=ticks, seed=seed + s, curriculum=curriculum)
+            for s in range(n_sessions)]
     states = np.array([e.reset(seed=seed + s)[0] for s, e in enumerate(envs)])
     gates = [DecisionGate(in_force=0, confirm_ticks=confirm_ticks,
                           rekey_escalates=rekey_escalates)
              for _ in range(n_sessions)]
     raw_in_force = np.zeros(n_sessions, dtype=int)
 
-    # CONN_TYPE and TIME_SINCE_REKEY are not sensor readings — one is a
-    # discrete interface classification and the other a local clock — so they
-    # get no observation noise.
-    noise_mask = np.array([1, 1, 1, 1, 0, 0, 1], dtype=np.float32)
+    # Only the measured dimensions carry observation noise; SENSOR_DIMS names
+    # which those are, beside the state indices themselves.
+    noise_mask = np.zeros(states.shape[1], dtype=np.float32)
+    noise_mask[list(SENSOR_DIMS)] = 1.0
 
     raw_changes = gated_changes = raw_rekeys = gated_rekeys = 0
     delay_ticks: list[int] = []
     pending_since = [None] * n_sessions
-    shortfall_gated, shortfall_literal = [], []
-    sec = np.array([a["security"] for a in ACTIVE_ACTIONS.values()])
+    # In-force algorithm per session per tick, for the shortfall computed in
+    # one vectorised pass at the end rather than element-by-element in here.
+    gated_hist = np.zeros((ticks, n_sessions), dtype=int)
+    literal_hist = np.zeros((ticks, n_sessions), dtype=int)
+    need_hist = np.zeros((ticks, n_sessions), dtype=np.float64)
 
     for t in range(ticks):
         obs = np.clip(
             states + rng.uniform(-noise, noise, size=states.shape).astype(np.float32) * noise_mask,
             0.0, 1.0).astype(np.float32)
-        tens, _ = model.policy.obs_to_tensor(obs)
-        with torch.no_grad():
-            probs = model.policy.get_distribution(tens).distribution.probs.numpy()
+        probs = policy_probs(model, obs)
         top = probs.argmax(axis=1)
-        want = optimal_action_batch(states)
+        # One reward matrix per tick: `optimal_action_batch` is its argmax and
+        # recomputes `security_need_batch` inside itself, so calling all three
+        # built the same quantities three times.
+        rewards = action_rewards_batch(states)
+        want = rewards.argmax(axis=1)
         need = security_need_batch(states)
+        need_hist[t] = need
 
         for i in range(n_sessions):
             # ungated: act on argmax directly
-            if top[i] == REKEY_ACTION:
+            if top[i] == REKEY_ACTION_IDX:
                 raw_rekeys += 1
             elif top[i] != raw_in_force[i]:
                 raw_changes += 1
@@ -257,26 +281,35 @@ def simulate(noise: float = 0.05, n_sessions: int = 400, ticks: int = 240,
             gated_changes += d.change_algorithm
             gated_rekeys += d.rekey
 
-            if want[i] != REKEY_ACTION and want[i] != gates[i].in_force:
+            # Delay must be read against the pending state carried in from
+            # *before* this tick's update — `gates[i].in_force` above already
+            # reflects the change `update()` just made, so checking
+            # `pending_since[i]` after also refreshing it against the new
+            # in_force would clear it in the same tick it should be read,
+            # undercounting the sample by nearly two orders of magnitude.
+            if d.change_algorithm and pending_since[i] is not None:
+                delay_ticks.append(t - pending_since[i])
+
+            if want[i] != REKEY_ACTION_IDX and want[i] != gates[i].in_force:
                 if pending_since[i] is None:
                     pending_since[i] = t
             else:
                 pending_since[i] = None
-            if d.change_algorithm and pending_since[i] is not None:
-                delay_ticks.append(t - pending_since[i])
 
             # security actually delivered this tick, gated vs the literal
             # Week 2 rekey rule (which never escalates during a rekey)
-            shortfall_gated.append(max(0.0, need[i] - sec[gates[i].in_force]))
-            shortfall_literal.append(max(0.0, need[i] - sec[raw_in_force[i]]))
+            gated_hist[t, i] = gates[i].in_force
+            literal_hist[t, i] = raw_in_force[i]
 
-        for i, e in enumerate(envs):
-            states[i] = e.step(int(top[i]))[0]
+            # `advance` rather than `step`: identical transition and RNG
+            # draws, without scoring a reward this loop does not read.
+            states[i] = envs[i].advance(int(top[i]))
 
     tick_hours = n_sessions * ticks * TICK_SECONDS / 3600
     med_delay = float(np.median(delay_ticks)) if delay_ticks else 0.0
     p95_delay = float(np.percentile(delay_ticks, 95)) if delay_ticks else 0.0
-    sg, sl = float(np.mean(shortfall_gated)), float(np.mean(shortfall_literal))
+    sg = float(security_shortfall_batch(need_hist, gated_hist).mean())
+    sl = float(security_shortfall_batch(need_hist, literal_hist).mean())
 
     label = "high-need sessions" if curriculum else "deployment distribution"
     print(f"\n--- decision gate, {label}, +/-{noise:.2f} observation noise, "
@@ -302,15 +335,34 @@ def simulate(noise: float = 0.05, n_sessions: int = 400, ticks: int = 240,
         "escalation_delay_median_ticks": med_delay,
         "escalation_delay_p95_ticks": p95_delay,
         "mean_shortfall_gated": sg, "mean_shortfall_ungated": sl,
-        "curriculum": curriculum, "cpu_relax": cpu_relax,
+        "curriculum": curriculum,
     }
+
+
+def _load_model():
+    """Load the promoted policy, with the same missing-model message every
+    other entry point prints rather than an SB3 stack trace on a fresh clone."""
+    from stable_baselines3 import PPO
+
+    from client.rl_agent.evaluate import MODEL_PATH
+
+    if not MODEL_PATH.exists():
+        raise SystemExit(
+            f"no trained model at {MODEL_PATH} — "
+            f"run `python -m client.rl_agent.train` first"
+        )
+    return PPO.load(MODEL_PATH, device="cpu")
 
 
 def main() -> int:
     import json
-    results = [simulate(noise=n) for n in (0.02, 0.05, 0.10)]
+
+    # Loaded once and passed down: every simulate() below scores the same
+    # promoted policy.
+    model = _load_model()
+    results = [simulate(noise=n, model=model) for n in (0.02, 0.05, 0.10)]
     print("\n=== confirm_ticks sensitivity at +/-0.05 ===")
-    results += [simulate(noise=0.05, confirm_ticks=ct, n_sessions=200)
+    results += [simulate(noise=0.05, confirm_ticks=ct, n_sessions=200, model=model)
                 for ct in (1, 2, 4)]
     # The escalation rule only has anything to do on high-security-need
     # sessions, which are ~0.5% of the deployment distribution — so it is
@@ -320,7 +372,7 @@ def main() -> int:
     for curr in (0.0, 1.0):
         for esc in (False, True):
             results.append(simulate(noise=0.05, rekey_escalates=esc,
-                                    n_sessions=200, curriculum=curr))
+                                    n_sessions=200, curriculum=curr, model=model))
     out = Path(__file__).resolve().parent / "models" / "decision_gate_sizing.json"
     out.write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nwrote {out}")
