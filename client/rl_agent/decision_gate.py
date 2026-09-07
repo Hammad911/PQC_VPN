@@ -156,17 +156,30 @@ class DecisionGate:
 
         top = max(range(len(probs)), key=lambda i: probs[i])
 
+        # A tick extends the confirm-streak only if it is a genuine algorithm
+        # challenger: not rekey-now, not already in force, and clearing the
+        # margin. Every other tick clears the streak right here, structurally,
+        # instead of each return path below having to remember to — the
+        # previous version reset it inline in three separate places, and
+        # forgetting one (the rekey branch, when the rekey did not escalate)
+        # was exactly the bug that produced this form. Leaving it alive lets a
+        # challenger confirm — including downgrading in_force — off fewer
+        # than confirm_ticks truly-consecutive ticks, with the interrupting
+        # tick quietly skipped over.
+        extends_streak = (
+            top != REKEY_ACTION_IDX
+            and top != self.in_force
+            and probs[top] - probs[self.in_force] >= self.min_margin
+        )
+        if not extends_streak:
+            self._candidate, self._streak = -1, 0
+        elif top == self._candidate:
+            self._streak += 1
+        else:
+            self._candidate, self._streak = top, 1
+
         # rekey: fires immediately, subject only to the cooldown.
         if top == REKEY_ACTION_IDX:
-            # The argmax this tick was rekey-now, not a KEM — whatever streak
-            # was building toward a challenger did not get a consecutive tick
-            # in its favour, fired or not, escalating or not, even suppressed
-            # by cooldown. Reset unconditionally: leaving it alive (the
-            # pre-Week-4 bug, and still true for the non-escalating case until
-            # this fix) lets a challenger confirm — including downgrading
-            # in_force — off fewer than confirm_ticks truly-consecutive ticks,
-            # with a rekey quietly skipped over in the middle.
-            self._candidate, self._streak = -1, 0
             if self._rekey_blocked_for == 0:
                 self._rekey_blocked_for = self.rekey_cooldown_ticks
                 reason = REASON_REKEY
@@ -180,17 +193,10 @@ class DecisionGate:
 
         # algorithm choice: needs a streak and a margin.
         if top == self.in_force:
-            self._candidate, self._streak = -1, 0
             return Decision(self.in_force, False, False, REASON_AGREES)
 
-        if probs[top] - probs[self.in_force] < self.min_margin:
-            self._candidate, self._streak = -1, 0
+        if not extends_streak:
             return Decision(self.in_force, False, False, REASON_LOW_MARGIN)
-
-        if top == self._candidate:
-            self._streak += 1
-        else:
-            self._candidate, self._streak = top, 1
 
         if self._streak >= self.confirm_ticks:
             self.in_force = top
