@@ -35,23 +35,21 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from stable_baselines3 import PPO  # noqa: E402
 
-from client.rl_agent.vpn_env import (  # noqa: E402
-    CPU_LOAD, RAM_AVAIL, STATE_DIM,
-    action_rewards_batch, optimal_action_batch, security_need_batch,
+from client.rl_agent.evaluate import (  # noqa: E402
+    MODEL_PATH, policy_probs, regret_batch,
 )
-from client.vpn_daemon.algo_registry import ACTIVE_ACTIONS  # noqa: E402
+from client.rl_agent.vpn_env import (  # noqa: E402
+    ACTION_NAMES, CPU_LOAD, N_ACTIONS, RAM_AVAIL, STATE_FIELD_NAMES,
+    action_rewards_batch, optimal_action_batch, security_need_batch,
+    uniform_states,
+)
 
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "ppo_vpn_agent.zip"
 RESULTS_PATH = Path(__file__).resolve().parent / "models" / "week3_verification.json"
-
-ACTION_NAMES = [ACTIVE_ACTIONS[k]["name"] for k in ACTIVE_ACTIONS]
-N_ACTIONS = len(ACTION_NAMES)
 
 # The jitter magnitudes the original verification used (PROJECT_BRIEFING.md
 # section on the demo scenarios), plus a wider band to find where it breaks.
@@ -65,22 +63,10 @@ JITTER_LEVELS = (0.05, 0.10, 0.15)
 FRAGILE_MARGIN = 0.10
 
 
-def policy_probs(model: PPO, states: np.ndarray) -> np.ndarray:
-    """Action probabilities for an (N, 7) batch."""
-    obs_tensor, _ = model.policy.obs_to_tensor(states.astype(np.float32))
-    with torch.no_grad():
-        dist = model.policy.get_distribution(obs_tensor)
-    return dist.distribution.probs.numpy()
-
-
-def sample_states(n: int, rng: np.random.Generator) -> np.ndarray:
-    """The deployment distribution: uniform over the observation box.
-
-    Deliberately NOT the training curriculum. The curriculum oversamples the
-    high-need corner to create learning signal; verifying on it would be
-    grading the policy on its own study notes.
-    """
-    return rng.uniform(0.0, 1.0, size=(n, STATE_DIM)).astype(np.float32)
+# Every check samples the DEPLOYMENT distribution (`uniform_states`), which is
+# deliberately NOT the training curriculum. The curriculum oversamples the
+# high-need corner to create learning signal; verifying on it would be grading
+# the policy on its own study notes.
 
 
 # ------------------------------------------------ check 1: need buckets
@@ -95,12 +81,14 @@ def bucket_by_security_need(model: PPO, n: int = 40_000, n_buckets: int = 10,
     perfect there and useless above 0.85 still scores >90% pooled.
     """
     rng = np.random.default_rng(seed)
-    states = sample_states(n, rng)
+    states = uniform_states(n, rng)
     need = security_need_batch(states)
-    oracle = optimal_action_batch(states)
-    chosen = policy_probs(model, states).argmax(axis=1)
+    # One reward matrix, not two: `optimal_action_batch` is its argmax, so
+    # calling both builds the (n, 4) matrix twice.
     rewards = action_rewards_batch(states)
-    regret = rewards[np.arange(n), oracle] - rewards[np.arange(n), chosen]
+    oracle = rewards.argmax(axis=1)
+    chosen = policy_probs(model, states).argmax(axis=1)
+    regret = regret_batch(rewards, chosen, oracle)
 
     edges = np.linspace(0.0, 1.0, n_buckets + 1)
     idx = np.clip(np.digitize(need, edges[1:-1]), 0, n_buckets - 1)
@@ -154,12 +142,12 @@ def jitter_stability(model: PPO, n: int = 8_000, n_perturb: int = 16,
     between consecutive calls on an idle machine.
     """
     rng = np.random.default_rng(seed)
-    base = sample_states(n, rng)
+    base = uniform_states(n, rng)
     base_policy = policy_probs(model, base).argmax(axis=1)
     base_oracle = optimal_action_batch(base)
 
     print(f"\n--- check 2: jitter stability over "
-          f"{', '.join(('CPU_LOAD','RAM_AVAIL','LATENCY','UPLOAD','CONN_TYPE','TIME_SINCE_REKEY','THREAT')[d] for d in dims)} ---")
+          f"{', '.join(STATE_FIELD_NAMES[d] for d in dims)} ---")
     print("  'unjustified' = the policy changed its decision while the oracle")
     print("  did not. Those are the flips that are pure noise-chasing; a flip")
     print("  the oracle also makes is the policy correctly tracking a real")
@@ -171,18 +159,24 @@ def jitter_stability(model: PPO, n: int = 8_000, n_perturb: int = 16,
 
     levels = []
     for j in JITTER_LEVELS:
-        flips = np.zeros(n, dtype=np.int64)
-        unjust = np.zeros(n, dtype=np.int64)
-        for _ in range(n_perturb):
+        # Draw every perturbation first, then score them in one batch. The
+        # per-perturbation arithmetic is unchanged (and so are the RNG draws,
+        # in the same order), but this is 1 forward pass and 1 oracle call per
+        # jitter level instead of `n_perturb` of each.
+        perturbed = np.empty((n_perturb, n, base.shape[1]), dtype=np.float32)
+        for k in range(n_perturb):
             noise = np.zeros_like(base)
             for d in dims:
                 noise[:, d] = rng.uniform(-j, j, size=n)
-            pert = np.clip(base + noise, 0.0, 1.0).astype(np.float32)
-            p = policy_probs(model, pert).argmax(axis=1)
-            o = optimal_action_batch(pert)
-            moved = p != base_policy
-            flips += moved
-            unjust += moved & (o == base_oracle)
+            perturbed[k] = np.clip(base + noise, 0.0, 1.0)
+
+        flat = perturbed.reshape(-1, base.shape[1])
+        p = policy_probs(model, flat).argmax(axis=1).reshape(n_perturb, n)
+        o = optimal_action_batch(flat).reshape(n_perturb, n)
+
+        moved = p != base_policy
+        flips = moved.sum(axis=0)
+        unjust = (moved & (o == base_oracle)).sum(axis=0)
 
         flip_rate = float(flips.sum() / (n * n_perturb))
         unjust_rate = float(unjust.sum() / (n * n_perturb))
@@ -226,7 +220,7 @@ def robust_margin(model: PPO, n: int = 40_000, seed: int = 13):
     about the gap under it.
     """
     rng = np.random.default_rng(seed)
-    states = sample_states(n, rng)
+    states = uniform_states(n, rng)
     probs = policy_probs(model, states)
     chosen = probs.argmax(axis=1)
     oracle = optimal_action_batch(states)
@@ -236,7 +230,7 @@ def robust_margin(model: PPO, n: int = 40_000, seed: int = 13):
     correct = chosen == oracle
 
     print("\n--- check 3: robust margin on correct decisions ---")
-    print(f"  a decision is 'fragile' if its margin over the runner-up is below")
+    print("  a decision is 'fragile' if its margin over the runner-up is below")
     print(f"  {FRAGILE_MARGIN:.2f} — close enough that float32 differences between the")
     print("  Python and Rust runtimes could plausibly reorder the top two.")
     header = (f"  {'oracle action':>13} | {'n':>6} | {'recall':>7} | "

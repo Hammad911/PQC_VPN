@@ -122,7 +122,9 @@ The gate returns three things per tick:
 - `in_force` — the algorithm that should be in use. Look up `action_index` in
   `algo_registry.json` for its `liboqs_id`.
 - `change_algorithm` — renegotiate to `in_force` with a fresh handshake.
-- `rekey` — re-run the handshake at `in_force` without changing strength.
+- `rekey` — re-run the handshake at `in_force`. This does not raise or lower
+  the algorithm on its own, but `in_force` may already have been raised by
+  this same tick's escalation rule — see the open item just below.
 
 `change_algorithm` and `rekey` are never both true in the same tick.
 
