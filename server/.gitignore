@@ -1,0 +1,8 @@
+# Rust build output
+target/
+
+# Never commit WireGuard keys / peer configs if any land here
+*.conf
+*.key
+*.psk
+peers/

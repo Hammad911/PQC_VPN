@@ -1,0 +1,16 @@
+[package]
+name = "crypto-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Throwaway Week 1 validation: exercise core::crypto and print wire sizes (not the server)"
+
+[dependencies]
+# Member 1's shared crate. Renamed on import because a package literally named
+# `core` shadows Rust's built-in `core` crate.
+vpn_core = { path = "../../core", package = "core" }
+
+# Same version the workspace lockfile already pins for `core`, so the concrete
+# ML-KEM key / ciphertext types line up. Used for the parameter-set marker types
+# and to read encoded byte lengths.
+ml-kem = "0.2.3"
