@@ -96,6 +96,15 @@ impl AlgoCode {
             AlgoCode::MlKem1024 => "ML-KEM-1024",
         }
     }
+    /// Inverse of [`name`](Self::name), for the persisted registry.
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "ML-KEM-512" => Some(AlgoCode::MlKem512),
+            "ML-KEM-768" => Some(AlgoCode::MlKem768),
+            "ML-KEM-1024" => Some(AlgoCode::MlKem1024),
+            _ => None,
+        }
+    }
     /// Encoded ML-KEM encapsulation-key length (client → server).
     pub fn mlkem_pub_len(self) -> usize {
         match self {

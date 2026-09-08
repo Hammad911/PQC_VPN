@@ -8,7 +8,7 @@
 //! - [`identity`]        — the server's long-term ML-DSA-65 key, persisted to disk (§5.2)
 //! - [`handshake`]       — server side: `ClientHello` → `ServerHello`
 //! - [`client_handshake`]— client side, for the test client and vector emitter
-//! - [`session`]         — in-memory session table
+//! - [`registry`]        — multi-peer registry (session ↔ wg peer ↔ address), persisted
 //!
 //! The cryptographic primitives are all `vpn_core::crypto` (Member 1's port).
 //! This crate adds only the wire protocol around them.
@@ -18,8 +18,8 @@ pub mod error;
 pub mod handshake;
 pub mod identity;
 pub mod kdf;
+pub mod registry;
 pub mod server;
-pub mod session;
 pub mod transcript;
 pub mod tunnel;
 pub mod wire;

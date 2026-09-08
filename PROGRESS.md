@@ -1136,6 +1136,70 @@ Responder containerised and running live on the droplet with a hardened compose
 config; protocol change log written for the Member 1 sync. `core/` and
 `contracts/` untouched.
 
+## Week 5 (Member 2 track, 2026-09-08) — multi-peer session management
+
+Assigned task (`TEAM_TIMELINE_PROPOSAL.md`): track which WireGuard peer maps to
+which active PQC session, for more than one client. Also fixes the Week 4
+stale-peer accumulation.
+
+### `registry.rs` (new — replaces `session.rs` and `tunnel::PeerAddresses`)
+
+One `Registry`, keyed by WireGuard public key (the stable peer identity). Each
+`Peer` = `{assigned_ip, session_id, algo, created, last_activity, rekeys}`.
+Unifies session tracking + IP allocation (lowest free host in the /24).
+
+- **Persistence** — `/var/lib/pqc-vpn/peers.json`, atomic temp+rename after every
+  handshake/rekey. **No PSKs** — the server never re-uses a stored PSK, and
+  WireGuard keeps the live one. Survives `docker compose restart`.
+- **Fresh `ClientHello` from a known peer** replaces its session (new
+  `session_id`, new PSK, same address, rekey count reset) — the algorithm-change
+  path from `PROTOCOL.md` §6.
+- **Rekey lookup** by `(wg_pubkey, session_id)` — a stale/wrong `session_id` →
+  `Error(UNKNOWN_SESSION)`.
+- **Capacity** — `--max-peers` (default 64, hard-capped at 253 for a /24). A new
+  peer over the limit → `Error(0x09 CAPACITY)`, a new protocol code.
+
+### Startup reconciliation
+
+On boot the server runs `wg show <iface> peers` and removes any `wg0` peer the
+loaded registry does not know (`wg set peer … remove`). Registry peers missing
+from `wg0` (e.g. after a `wg0` restart) are kept — their clients re-handshake.
+
+### `tunnel.rs` changes
+
+`PskInstaller` grew `list_installed_peers`, `remove_peer`, `last_handshakes`;
+`install` dropped the `first_install` branch (always sets `allowed-ips`,
+idempotent). `WgCli` shells out to `wg show … peers` / `latest-handshakes` and
+`wg set … peer … remove`.
+
+### Optional idle sweep
+
+`--idle-timeout-secs` (default 0 = off): a background thread that every minute
+evicts peers whose registry `last_activity` **and** last WireGuard handshake are
+both older than the timeout. Implemented, off by default — real use is Week
+9/10.
+
+### Verified
+
+- `cargo test -p handshake-server` — 22 unit + 4 integration (6 new `registry`
+  tests: distinct-address allocation, known-peer re-handshake keeps IP,
+  rekey session/downgrade checks, capacity, persist round-trip, idle sweep;
+  `over_tcp_two_peers_get_distinct_addresses_and_sessions`).
+  `cargo test --workspace --exclude desktop` — core 20/20, no warnings.
+- **Live on the droplet** (containerised): redeploy → startup log
+  `reconcile: 0 known / 2 on wg0 / 2 stale removed` — the Week 3/4 leftovers
+  cleaned. Three `test-client` runs → `10.8.0.2` / `.3` / `.4`, distinct
+  sessions and algorithms, all three in `peers.json` and as distinct `wg0`
+  peers with their own `/32`. `docker compose restart` →
+  `reconcile: 3 known / 3 on wg0 / 0 stale removed` — registry reloaded,
+  tunnels preserved.
+
+### Status against the Week 5 mandate
+
+Multi-peer registry with persistence, capacity, and startup reconciliation,
+verified live with three concurrent peers and a restart. `core/` and
+`contracts/` untouched.
+
 ## How to reproduce
 
 ```bash

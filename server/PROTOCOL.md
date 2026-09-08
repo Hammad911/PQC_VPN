@@ -26,6 +26,7 @@ since Week 2. `VER` is still `0x01`; no incompatible change has been made.
 | Week 2 | Transcript definition pinned to include `client_nonce ‖ server_nonce` (§5.1) — this is the still-open ask to fold back into `core::build_handshake_transcript` (§8 Q1) | additive to `core`'s current function; wire format unchanged |
 | Week 3 | `ServerFinish` gained `server_wg_pubkey (32)`, `assigned_ip (4)`, `wg_port (2)` (§4.5) so the client needs no out-of-band tunnel config | **append-only** to one message; a `ServerFinish` reader written to the Week 2 layout would need updating, but no client existed yet |
 | Week 4 | No protocol change (containerisation only). This section added. | — |
+| Week 5 | New `Error` code `0x09 CAPACITY` (§4.7). Rekey lookup clarified: by `(client_wg_pubkey, session_id)` pair, not `session_id` alone (§4.6). `allowed-ips` always sent on `wg set` (§4.5). | additive error code; no wire-format change |
 
 **For Member 1:** the client side of `core/protocol/` should be built against
 this document as of Week 4, and verified against `server/handshake-vectors.json`
@@ -177,14 +178,26 @@ both sides derived it. Both sides close the TCP connection.
 
 The server installs the peer on its side before sending `ServerFinish`
 (`wg set <iface> peer <client_wg_pubkey> preshared-key … allowed-ips
-assigned_ip/32`, where `client_wg_pubkey` came from `ClientHello` §4.2); a rekey
-swaps only the preshared key and leaves `allowed-ips` alone.
+assigned_ip/32`, where `client_wg_pubkey` came from `ClientHello` §4.2). The
+`allowed-ips` argument is always sent — on a rekey it re-sets the same value, a
+no-op.
+
+**Server-side peer/session tracking (Week 5).** The server keeps a registry
+keyed by `client_wg_pubkey`: one `Peer` = `{assigned_ip, session_id, algo,
+timestamps, rekey count}`. A fresh `ClientHello` from a **known** pubkey
+*replaces* that peer's session (new `session_id`, new PSK, same `assigned_ip`) —
+this is how an algorithm change §6 is done. The registry is persisted (no PSKs)
+and, on startup, reconciled against the live interface: `wg` peers the registry
+does not know are removed.
 
 ### 4.6 `RekeyRequest` (0x05)
 
 Identical body to `ClientHello`, plus a leading `session_id` (16). The server
-responds with `ServerHello` / expects `ClientFinish` as normal, then swaps the
-peer's PSK **without** removing the peer, so the tunnel does not drop (§6).
+looks the peer up by **`client_wg_pubkey`** and checks the supplied `session_id`
+matches that peer's current session; if the pubkey is unknown or the
+`session_id` is stale → `Error(UNKNOWN_SESSION)`. It then responds with
+`ServerHello` / expects `ClientFinish` as normal, and swaps the peer's PSK
+**without** removing the peer, so the tunnel does not drop (§6).
 
 `algo` rule (depends on open Decision 1, §8):
 - **downgrade is always rejected** — `algo` weaker than the session's in-force
@@ -212,6 +225,7 @@ peer's PSK **without** removing the peer, so the tunnel does not drop (§6).
 | `0x06` | `AUTH_FAILED` (client tag did not verify) |
 | `0x07` | `RATE_LIMITED` |
 | `0x08` | `INTERNAL` |
+| `0x09` | `CAPACITY` (server at `--max-peers`; new peer refused — Week 5) |
 
 ---
 

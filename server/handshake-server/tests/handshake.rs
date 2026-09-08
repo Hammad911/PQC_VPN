@@ -2,7 +2,7 @@
 //!
 //! `in_process_*` exercise the crypto/protocol logic directly.
 //! `over_tcp_*` run a real `TcpListener` + `handle_connection` (with a dry-run
-//! PSK installer), so `Message::read`/`write` and the tunnel seam are exercised.
+//! PSK installer), so `Message::read`/`write` and the registry are exercised.
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -12,9 +12,9 @@ use handshake_server::client_handshake;
 use handshake_server::handshake;
 use handshake_server::identity::ServerIdentity;
 use handshake_server::kdf;
+use handshake_server::registry::{Registry, DEFAULT_MAX_PEERS};
 use handshake_server::server::{self, ConnResult, ServerContext};
-use handshake_server::session::SessionTable;
-use handshake_server::tunnel::{DryRun, PeerAddresses, TunnelSettings};
+use handshake_server::tunnel::{DryRun, TunnelSettings};
 use handshake_server::wire::{AlgoCode, Message};
 use handshake_server::HandshakeError;
 
@@ -23,8 +23,7 @@ const ALL: [AlgoCode; 3] = [AlgoCode::MlKem512, AlgoCode::MlKem768, AlgoCode::Ml
 fn test_ctx() -> Arc<ServerContext> {
     Arc::new(ServerContext {
         identity: ServerIdentity::generate(),
-        sessions: SessionTable::new(),
-        addrs: PeerAddresses::new([10, 8, 0, 0]),
+        registry: Registry::new([10, 8, 0, 0], DEFAULT_MAX_PEERS),
         installer: Box::new(DryRun),
         tunnel: TunnelSettings {
             server_wg_pubkey: [0x5a; 32],
@@ -83,22 +82,19 @@ fn tampered_server_hello_fails_auth() {
     ));
 }
 
-#[test]
-fn over_tcp_full_handshake_returns_tunnel_params() {
-    let ctx = test_ctx();
+/// Run one full handshake over a loopback socket. Returns the assigned IP.
+fn tcp_handshake(ctx: &Arc<ServerContext>, wg_pub: [u8; 32], algo: AlgoCode) -> [u8; 4] {
     let vk = ctx.identity.verifying_key_bytes();
-
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let srv_ctx = Arc::clone(&ctx);
+    let srv_ctx = Arc::clone(ctx);
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         server::handle_connection(stream, &srv_ctx).unwrap()
     });
 
-    let wg_pub = [0x11u8; 32];
-    let state = client_handshake::start(AlgoCode::MlKem1024, [7u8; 32], wg_pub);
+    let state = client_handshake::start(algo, rand_nonce(), wg_pub);
     let mut stream = TcpStream::connect(addr).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
 
@@ -110,21 +106,45 @@ fn over_tcp_full_handshake_returns_tunnel_params() {
     let (keys, finish, transcript) = state.finish(&sh, &vk).unwrap();
     Message::ClientFinish(finish.clone()).write(&mut stream).unwrap();
 
-    match Message::read(&mut stream).unwrap() {
+    let assigned = match Message::read(&mut stream).unwrap() {
         Message::ServerFinish(sf) => {
             assert_eq!(sf.session_id, finish.session_id);
             assert!(kdf::verify_server_tag(&keys.confirm_key, &transcript, &sf.server_tag));
             assert_eq!(sf.server_wg_pubkey, [0x5a; 32]);
-            assert_eq!(sf.assigned_ip, [10, 8, 0, 2]); // first peer
             assert_eq!(sf.wg_port, 51820);
+            sf.assigned_ip
         }
         other => panic!("expected ServerFinish, got {other:?}"),
-    }
-
+    };
     match server.join().unwrap() {
         ConnResult::Handshake { session_id } => assert_eq!(session_id, finish.session_id),
         other => panic!("expected Handshake, got {other:?}"),
     }
-    assert_eq!(ctx.sessions.len(), 1);
-    assert!(ctx.addrs.known(&wg_pub));
+    assigned
+}
+
+fn rand_nonce() -> [u8; 32] {
+    let mut n = [0u8; 32];
+    for (i, b) in n.iter_mut().enumerate() {
+        *b = (i as u8).wrapping_mul(37).wrapping_add(1);
+    }
+    n
+}
+
+#[test]
+fn over_tcp_two_peers_get_distinct_addresses_and_sessions() {
+    let ctx = test_ctx();
+    let ip1 = tcp_handshake(&ctx, [0x11; 32], AlgoCode::MlKem768);
+    let ip2 = tcp_handshake(&ctx, [0x22; 32], AlgoCode::MlKem1024);
+
+    assert_eq!(ip1, [10, 8, 0, 2]);
+    assert_eq!(ip2, [10, 8, 0, 3]);
+    assert_eq!(ctx.registry.len(), 2);
+    assert!(ctx.registry.contains(&[0x11; 32]));
+    assert!(ctx.registry.contains(&[0x22; 32]));
+
+    // same peer re-handshakes -> same address, still one entry
+    let ip1_again = tcp_handshake(&ctx, [0x11; 32], AlgoCode::MlKem512);
+    assert_eq!(ip1_again, ip1);
+    assert_eq!(ctx.registry.len(), 2);
 }
