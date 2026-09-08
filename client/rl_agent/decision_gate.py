@@ -156,12 +156,30 @@ class DecisionGate:
 
         top = max(range(len(probs)), key=lambda i: probs[i])
 
+        # A tick extends the confirm-streak only if it is a genuine algorithm
+        # challenger: not rekey-now, not already in force, and clearing the
+        # margin. Every other tick clears the streak right here, structurally,
+        # instead of each return path below having to remember to — the
+        # previous version reset it inline in three separate places, and
+        # forgetting one (the rekey branch, when the rekey did not escalate)
+        # was exactly the bug that produced this form. Leaving it alive lets a
+        # challenger confirm — including downgrading in_force — off fewer
+        # than confirm_ticks truly-consecutive ticks, with the interrupting
+        # tick quietly skipped over.
+        extends_streak = (
+            top != REKEY_ACTION_IDX
+            and top != self.in_force
+            and probs[top] - probs[self.in_force] >= self.min_margin
+        )
+        if not extends_streak:
+            self._candidate, self._streak = -1, 0
+        elif top == self._candidate:
+            self._streak += 1
+        else:
+            self._candidate, self._streak = top, 1
+
         # rekey: fires immediately, subject only to the cooldown.
         if top == REKEY_ACTION_IDX:
-            # A rekey request does not disturb an algorithm change in
-            # progress — they are independent decisions, per the registry's
-            # rekey semantics ("re-run the handshake at the algorithm
-            # currently in force").
             if self._rekey_blocked_for == 0:
                 self._rekey_blocked_for = self.rekey_cooldown_ticks
                 reason = REASON_REKEY
@@ -170,29 +188,15 @@ class DecisionGate:
                     if ACTION_SECURITY[best_kem] > ACTION_SECURITY[self.in_force]:
                         self.in_force = best_kem
                         reason = REASON_REKEY_ESCALATED
-                        # A streak banked against the pre-escalation incumbent
-                        # must not carry over: it would let a challenger
-                        # confirm against the new (stronger) in_force after
-                        # fewer than confirm_ticks ticks, including one that
-                        # downgrades it — the one thing this gate promises
-                        # never happens on a single noisy tick.
-                        self._candidate, self._streak = -1, 0
                 return Decision(self.in_force, False, True, reason)
             return Decision(self.in_force, False, False, REASON_REKEY_SUPPRESSED)
 
         # algorithm choice: needs a streak and a margin.
         if top == self.in_force:
-            self._candidate, self._streak = -1, 0
             return Decision(self.in_force, False, False, REASON_AGREES)
 
-        if probs[top] - probs[self.in_force] < self.min_margin:
-            self._candidate, self._streak = -1, 0
+        if not extends_streak:
             return Decision(self.in_force, False, False, REASON_LOW_MARGIN)
-
-        if top == self._candidate:
-            self._streak += 1
-        else:
-            self._candidate, self._streak = top, 1
 
         if self._streak >= self.confirm_ticks:
             self.in_force = top

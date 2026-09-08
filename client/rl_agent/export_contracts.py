@@ -170,6 +170,11 @@ _AMBIGUOUS = [0.45, 0.52, 0.02, 0.01]        # challenger leads by under MIN_MAR
 _REKEY = [0.05, 0.05, 0.10, 0.80]
 _REKEY_PREFERRING_1024 = [0.02, 0.10, 0.28, 0.60]
 _REKEY_PREFERRING_512 = [0.30, 0.05, 0.05, 0.60]
+_CHALLENGE_512 = [0.85, 0.02, 0.03, 0.10]    # ML-KEM-512 challenges, wide margin
+# rekey wins, but the KEM mass peaks at 1024 (0.05) which is never stronger
+# than an in-force of ML-KEM-1024 itself — used starting from in_force=2 to
+# exercise a rekey that fires without escalating.
+_REKEY_NO_ESCALATE = [0.02, 0.03, 0.05, 0.90]
 
 # Scenario names double as the failure message a Rust test prints, so they say
 # what the tick sequence is exercising rather than "case 3".
@@ -190,6 +195,8 @@ _GATE_SCENARIOS = [
      [_REKEY_PREFERRING_1024]),
     ("rekey never downgrades the algorithm in force", 2,
      [_REKEY_PREFERRING_512]),
+    ("a rekey resets a challenger streak, even when it does not escalate", 2,
+     [_CHALLENGE_512, _CHALLENGE_512, _REKEY_NO_ESCALATE, _CHALLENGE_512]),
 ]
 
 

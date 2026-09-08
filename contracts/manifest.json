@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "generated_by": "python -m client.rl_agent.export_contracts",
-  "generated_at_utc": "2026-09-07T07:53:14Z",
+  "generated_at_utc": "2026-09-07T18:27:08Z",
   "git_commit": {
-    "head": "63efbbd8d6c6a0ceae90bd7ac0f5a0ad2cb31b44",
+    "head": "f21d89963135c2c25aac097d95cd6d2cd15839f3",
     "tree_dirty": true,
     "note": "generated from the working tree; when tree_dirty is true the artifacts do not correspond to `head` but to the commit made immediately after it"
   },
@@ -22,8 +22,8 @@
       "bytes": 23319
     },
     "contracts/decision_gate_vectors.json": {
-      "sha256": "2d526359819fd4c54708cb576cb18ca6dfe20309501e664b51cd1c69f1ab3ee0",
-      "bytes": 9713
+      "sha256": "b0c51fe6b42bcc002df23c3cb362ff651acce838e97d5e77a488f1901b076660",
+      "bytes": 11046
     },
     "client/rl_agent/models/ppo_vpn_agent.onnx": {
       "sha256": "18a491fef74a82356de6b13480259e1bb895e82a3542be183a286cff6cedfaaa",
