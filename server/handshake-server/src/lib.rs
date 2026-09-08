@@ -21,6 +21,7 @@ pub mod kdf;
 pub mod server;
 pub mod session;
 pub mod transcript;
+pub mod tunnel;
 pub mod wire;
 
 pub use error::{HandshakeError, WireError};

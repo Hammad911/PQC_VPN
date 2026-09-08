@@ -1,8 +1,8 @@
 //! End-to-end handshake tests.
 //!
 //! `in_process_*` exercise the crypto/protocol logic directly.
-//! `over_tcp_*` run a real `TcpListener` + `handle_connection` against the
-//! `test-client` code path, so `Message::read`/`write` are exercised too.
+//! `over_tcp_*` run a real `TcpListener` + `handle_connection` (with a dry-run
+//! PSK installer), so `Message::read`/`write` and the tunnel seam are exercised.
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -12,12 +12,27 @@ use handshake_server::client_handshake;
 use handshake_server::handshake;
 use handshake_server::identity::ServerIdentity;
 use handshake_server::kdf;
-use handshake_server::server::{self, ConnResult};
+use handshake_server::server::{self, ConnResult, ServerContext};
 use handshake_server::session::SessionTable;
+use handshake_server::tunnel::{DryRun, PeerAddresses, TunnelSettings};
 use handshake_server::wire::{AlgoCode, Message};
 use handshake_server::HandshakeError;
 
 const ALL: [AlgoCode; 3] = [AlgoCode::MlKem512, AlgoCode::MlKem768, AlgoCode::MlKem1024];
+
+fn test_ctx() -> Arc<ServerContext> {
+    Arc::new(ServerContext {
+        identity: ServerIdentity::generate(),
+        sessions: SessionTable::new(),
+        addrs: PeerAddresses::new([10, 8, 0, 0]),
+        installer: Box::new(DryRun),
+        tunnel: TunnelSettings {
+            server_wg_pubkey: [0x5a; 32],
+            wg_port: 51820,
+            subnet_base: [10, 8, 0, 0],
+        },
+    })
+}
 
 #[test]
 fn in_process_handshake_all_levels_agree_on_psk() {
@@ -69,22 +84,21 @@ fn tampered_server_hello_fails_auth() {
 }
 
 #[test]
-fn over_tcp_full_handshake() {
-    let identity = Arc::new(ServerIdentity::generate());
-    let vk = identity.verifying_key_bytes();
-    let sessions = Arc::new(SessionTable::new());
+fn over_tcp_full_handshake_returns_tunnel_params() {
+    let ctx = test_ctx();
+    let vk = ctx.identity.verifying_key_bytes();
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let srv_identity = Arc::clone(&identity);
-    let srv_sessions = Arc::clone(&sessions);
+    let srv_ctx = Arc::clone(&ctx);
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        server::handle_connection(stream, &srv_identity, &srv_sessions).unwrap()
+        server::handle_connection(stream, &srv_ctx).unwrap()
     });
 
-    let state = client_handshake::start(AlgoCode::MlKem1024, [7u8; 32], [3u8; 32]);
+    let wg_pub = [0x11u8; 32];
+    let state = client_handshake::start(AlgoCode::MlKem1024, [7u8; 32], wg_pub);
     let mut stream = TcpStream::connect(addr).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
 
@@ -95,18 +109,22 @@ fn over_tcp_full_handshake() {
     };
     let (keys, finish, transcript) = state.finish(&sh, &vk).unwrap();
     Message::ClientFinish(finish.clone()).write(&mut stream).unwrap();
+
     match Message::read(&mut stream).unwrap() {
         Message::ServerFinish(sf) => {
             assert_eq!(sf.session_id, finish.session_id);
             assert!(kdf::verify_server_tag(&keys.confirm_key, &transcript, &sf.server_tag));
+            assert_eq!(sf.server_wg_pubkey, [0x5a; 32]);
+            assert_eq!(sf.assigned_ip, [10, 8, 0, 2]); // first peer
+            assert_eq!(sf.wg_port, 51820);
         }
         other => panic!("expected ServerFinish, got {other:?}"),
     }
 
-    let result = server.join().unwrap();
-    match result {
+    match server.join().unwrap() {
         ConnResult::Handshake { session_id } => assert_eq!(session_id, finish.session_id),
         other => panic!("expected Handshake, got {other:?}"),
     }
-    assert_eq!(sessions.len(), 1);
+    assert_eq!(ctx.sessions.len(), 1);
+    assert!(ctx.addrs.known(&wg_pub));
 }

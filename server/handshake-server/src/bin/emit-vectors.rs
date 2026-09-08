@@ -95,6 +95,9 @@ fn main() {
             "frame_hex": frame_hex(&Message::ServerFinish(ServerFinish {
                 session_id,
                 server_tag,
+                server_wg_pubkey: [0x5au8; 32],
+                assigned_ip: [10, 8, 0, 2],
+                wg_port: 51820,
             })),
         },
         {

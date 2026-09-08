@@ -297,6 +297,13 @@ pub struct ClientFinish {
 pub struct ServerFinish {
     pub session_id: [u8; 16],
     pub server_tag: [u8; 32],
+    /// WireGuard tunnel parameters the client needs to bring the tunnel up
+    /// (PROTOCOL.md §4.5). The PSK itself is not sent — both sides derived it.
+    pub server_wg_pubkey: [u8; 32],
+    /// IPv4 address the server assigned this peer inside the tunnel.
+    pub assigned_ip: [u8; 4],
+    /// UDP port the server's WireGuard listens on.
+    pub wg_port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,6 +357,9 @@ impl Message {
             Message::ServerFinish(m) => {
                 w.bytes(&m.session_id);
                 w.bytes(&m.server_tag);
+                w.bytes(&m.server_wg_pubkey);
+                w.bytes(&m.assigned_ip);
+                w.bytes(&m.wg_port.to_be_bytes());
             }
             Message::RekeyRequest(m) => {
                 w.bytes(&m.session_id);
@@ -375,6 +385,9 @@ impl Message {
             MsgType::ServerFinish => Message::ServerFinish(ServerFinish {
                 session_id: r.take_arr::<16>("session_id")?,
                 server_tag: r.take_arr::<32>("server_tag")?,
+                server_wg_pubkey: r.take_arr::<32>("server_wg_pubkey")?,
+                assigned_ip: r.take_arr::<4>("assigned_ip")?,
+                wg_port: r.take_u16()?,
             }),
             MsgType::RekeyRequest => {
                 let session_id = r.take_arr::<16>("session_id")?;
@@ -507,6 +520,9 @@ mod tests {
             Message::ServerFinish(ServerFinish {
                 session_id: [3u8; 16],
                 server_tag: [4u8; 32],
+                server_wg_pubkey: [5u8; 32],
+                assigned_ip: [10, 8, 0, 2],
+                wg_port: 51820,
             }),
             Message::RekeyRequest(RekeyRequest {
                 session_id: [5u8; 16],

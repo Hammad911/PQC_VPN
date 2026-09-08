@@ -17,19 +17,24 @@ schedule, the server identity, and a blocking TCP server.
 | `identity` | long-term ML-DSA-65 key, persisted as its 32-byte seed (§5.2) |
 | `handshake` | server: `ClientHello` → `ServerHello` |
 | `client_handshake` | client side, for `test-client` and `emit-vectors` |
+| `tunnel` | `PskInstaller` (`WgCli` runs `wg set`; `DryRun` logs) + per-peer address allocation |
 | `session` | in-memory session table |
-| `server` | TCP accept loop + per-connection handler |
+| `server` | TCP accept loop + per-connection handler; installs the PSK on completion |
 
 ## Binaries
 
 ```bash
-# the server
+# the server — dry-run (no WireGuard touched)
 cargo run -p handshake-server --bin handshake-server -- \
     --bind 0.0.0.0:51821 --identity ./server-identity.seed
 
-# throwaway test client — runs a full handshake, prints the derived PSK
+# the server — real: install PSKs into wg0 (needs CAP_NET_ADMIN)
+cargo run -p handshake-server --bin handshake-server -- \
+    --wg-interface wg0 --wg-port 51820 --tunnel-cidr 10.8.0.0/24
+
+# throwaway test client — full handshake, then prints a wg-quick client config
 cargo run -p handshake-server --bin test-client -- \
-    <host:port> <verifying-key-hex | @path> --algo 512|768|1024
+    <handshake-host:port> <verifying-key-hex | @path> --algo 512|768|1024
 
 # regenerate server/handshake-vectors.json
 cargo run -p handshake-server --bin emit-vectors -- server/handshake-vectors.json
@@ -41,17 +46,17 @@ identity file as `<identity>.pub` (hex). That hex is what a client pins.
 ## Tests
 
 ```bash
-cargo test -p handshake-server        # 13 unit + 4 integration
+cargo test -p handshake-server        # 17 unit + 4 integration
 ```
 
-`tests/handshake.rs` includes `over_tcp_full_handshake` — a real `TcpListener`
-handshake for ML-KEM-512/768/1024 with both sides asserting the same PSK.
+`tests/handshake.rs` includes `over_tcp_full_handshake_returns_tunnel_params` —
+a real `TcpListener` handshake for ML-KEM-512/768/1024 with both sides asserting
+the same PSK, plus a dry-run PSK install and the returned tunnel params.
 
-## Week 2 scope / not yet done
+## Not yet done (later weeks)
 
-- **No `wg set`.** The server derives and records the PSK; where it would run
-  `wg set … preshared-key` it logs `would install/swap PSK …`. PSK injection is
-  Week 3.
+- **Peers are installed live via `wg set`, not persisted to `wg0.conf`** — they
+  don't survive a `wg0` restart. Persistence + multi-peer lifecycle is Week 5.
 - **No `RekeyRequest` CLI.** The server-side rekey path (`PROTOCOL.md` §6,
   including the `REKEY_ESCALATES` no-downgrade rule) is implemented and
   unit-tested; a `--rekey <session-id>` flag on `test-client` lands Week 6.

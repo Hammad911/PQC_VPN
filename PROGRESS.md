@@ -1007,6 +1007,75 @@ Responder implemented, matches the client's algorithm set and ML-DSA-65 identity
 model, tested three ways (unit, in-process integration, live over the internet),
 and deployed. No changes to `core/` or `contracts/`.
 
+## Week 3 (Member 2 track, 2026-09-08) — `wg set` PSK injection
+
+Assigned task (`TEAM_TIMELINE_PROPOSAL.md`): server-side `wg set` PSK injection
+for a single test peer; one manual end-to-end handshake against a throwaway
+client. Done — the `would install PSK …` stub is now a real WireGuard peer.
+
+### `tunnel` module
+
+`PskInstaller` is the seam between a completed handshake and the tunnel:
+
+- `WgCli` — shells out to `wg set <iface> peer <client_wg_pubkey>
+  preshared-key /dev/stdin [allowed-ips <ip>/32]`, and queries the server's own
+  WireGuard public key at startup via `wg show <iface> public-key`.
+- `DryRun` — logs the action, touches nothing. Default when `--wg-interface` is
+  absent, so tests and no-privilege dev runs still work.
+- `PeerAddresses` — allocates a stable `10.8.0.0/24` address per peer wg pubkey
+  (`.1` is the server); a peer that rekeys keeps its address.
+
+### Protocol addition — `ServerFinish` carries tunnel params
+
+`PROTOCOL.md` §4.5: `ServerFinish` gained `server_wg_pubkey (32)`,
+`assigned_ip (4)`, `wg_port (2)`. The client can now bring its tunnel up with no
+out-of-band config — it learns everything except the PSK from the handshake, and
+the PSK both sides derived. Protocol is still DRAFT/unfrozen; `handshake-vectors.json`
+regenerated (`server_finish` frame 52 → 90 bytes).
+
+### Server wiring
+
+`handle_connection` now, after the client tag verifies: allocates the peer's
+address, calls `installer.install(pubkey, psk, ip, algo, first_install)`, then
+sends `ServerFinish` with the tunnel params. A `RekeyRequest` swaps only the
+PSK (`first_install=false`, no `allowed-ips` change) — `PROTOCOL.md` §6.
+`main.rs` gained `--wg-interface`, `--wg-port`, `--tunnel-cidr`, `--wg-pubkey`.
+
+### `test-client`
+
+Now generates a real WireGuard keypair, sends its public key in `ClientHello`,
+and after the handshake prints a complete `wg-quick` client config built from
+the returned tunnel params + derived PSK.
+
+### Verified
+
+- `cargo test -p handshake-server` — 17 unit + 4 integration (4 new `tunnel`
+  tests: address allocation stability, `wg set` argv construction, CIDR parsing,
+  dry-run). `over_tcp_full_handshake_returns_tunnel_params` asserts the client
+  receives the right `assigned_ip` / `server_wg_pubkey` / `wg_port`.
+- `cargo test --workspace --exclude desktop` — core 20/20 unchanged, no warnings.
+- **Live end-to-end.** Redeployed to the droplet with
+  `--wg-interface wg0` and `AmbientCapabilities=CAP_NET_ADMIN` (unit updated).
+  `test-client` from WSL completed the handshake; the server ran `wg set` and
+  `wg show wg0` then showed the new peer with `preshared key: (hidden)` and
+  `allowed ips: 10.8.0.2/32`; the client emitted a ready `pqc0.conf`. Server
+  log: `HANDSHAKE session=… algo=ML-KEM-768 peer @ 10.8.0.2`. The final
+  `wg-quick up` + `ping 10.8.0.1` is a manual step (needs local sudo).
+
+### Deliberately not done (later weeks)
+
+- Peers are installed live via `wg set`, not written to `wg0.conf`, so they do
+  not survive a `wg0` restart — fine for a test peer; persistence with
+  multi-peer lifecycle is Week 5.
+- `RekeyRequest` still has no `test-client` flag (Week 6); the server path is
+  coded + unit-tested.
+- Replay cache / rate limiting — Week 7.
+
+### Status against the Week 3 mandate
+
+Real `wg set` PSK injection working end to end against a throwaway client, live
+on the droplet. `core/` and `contracts/` untouched.
+
 ## How to reproduce
 
 ```bash

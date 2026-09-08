@@ -1,10 +1,9 @@
 //! TCP server loop and per-connection handler — `PROTOCOL.md` §2.
 //!
 //! Blocking, one thread per connection, one handshake (or rekey) per connection.
-//! Week 2: completes the authenticated handshake and records the PSK; the
-//! `wg set` install is a logged stub until Week 3.
+//! Week 3: a completed handshake now installs the derived PSK into WireGuard
+//! via [`crate::tunnel::PskInstaller`] (real `wg set`, or a dry-run log).
 
-use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -14,19 +13,28 @@ use crate::handshake;
 use crate::identity::ServerIdentity;
 use crate::kdf;
 use crate::session::{Session, SessionTable};
+use crate::tunnel::{InstallError, PeerAddresses, PskInstaller, TunnelSettings};
 use crate::wire::{ClientHello, ErrorMsg, FrameError, Message, ServerFinish};
 
 pub const CONN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Accept loop. Never returns unless the listener errors fatally.
-pub fn serve(listener: TcpListener, identity: Arc<ServerIdentity>, sessions: Arc<SessionTable>) {
+/// Everything a connection handler needs, shared across threads.
+pub struct ServerContext {
+    pub identity: ServerIdentity,
+    pub sessions: SessionTable,
+    pub addrs: PeerAddresses,
+    pub installer: Box<dyn PskInstaller>,
+    pub tunnel: TunnelSettings,
+}
+
+/// Accept loop. Returns only if the listener errors fatally.
+pub fn serve(listener: TcpListener, ctx: Arc<ServerContext>) {
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                let identity = Arc::clone(&identity);
-                let sessions = Arc::clone(&sessions);
+                let ctx = Arc::clone(&ctx);
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_connection(s, &identity, &sessions) {
+                    if let Err(e) = handle_connection(s, &ctx) {
                         eprintln!("connection error: {e}");
                     }
                 });
@@ -36,7 +44,6 @@ pub fn serve(listener: TcpListener, identity: Arc<ServerIdentity>, sessions: Arc
     }
 }
 
-/// Outcome of one connection, for logging / tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnResult {
     Handshake { session_id: [u8; 16] },
@@ -44,11 +51,7 @@ pub enum ConnResult {
     Rejected { code: u8 },
 }
 
-pub fn handle_connection(
-    mut stream: TcpStream,
-    identity: &ServerIdentity,
-    sessions: &SessionTable,
-) -> Result<ConnResult, ConnError> {
+pub fn handle_connection(mut stream: TcpStream, ctx: &ServerContext) -> Result<ConnResult, ConnError> {
     stream.set_read_timeout(Some(CONN_TIMEOUT))?;
     stream.set_write_timeout(Some(CONN_TIMEOUT))?;
 
@@ -68,7 +71,7 @@ pub fn handle_connection(
 
     // --- rekey policy (PROTOCOL.md §6) ---
     if let Some(sid) = rekey_session {
-        match sessions.in_force_algo(&sid) {
+        match ctx.sessions.in_force_algo(&sid) {
             None => {
                 reject(&mut stream, 0x04, "unknown session id")?;
                 return Ok(ConnResult::Rejected { code: 0x04 });
@@ -77,14 +80,14 @@ pub fn handle_connection(
                 reject(&mut stream, 0x05, "rekey may not downgrade the algorithm")?;
                 return Ok(ConnResult::Rejected { code: 0x05 });
             }
-            Some(_) => {} // equal, or stronger (REKEY_ESCALATES default on)
+            Some(_) => {}
         }
     }
 
     let session_id = rekey_session.unwrap_or_else(|| rand::random());
     let server_nonce: [u8; 32] = rand::random();
 
-    let outcome = match handshake::respond(identity, &hello, session_id, server_nonce) {
+    let outcome = match handshake::respond(&ctx.identity, &hello, session_id, server_nonce) {
         Ok(o) => o,
         Err(e) => {
             let code = e.protocol_code();
@@ -103,7 +106,6 @@ pub fn handle_connection(
             return Err(ConnError::Protocol(format!("expected ClientFinish, got {other:?}")));
         }
     };
-
     if fin.session_id != session_id
         || !kdf::verify_client_tag(&outcome.keys.confirm_key, &outcome.transcript, &fin.client_tag)
     {
@@ -111,18 +113,34 @@ pub fn handle_connection(
         return Ok(ConnResult::Rejected { code: 0x06 });
     }
 
-    // --- record + (stubbed) PSK install ---
-    let peer_hex = hex::encode(hello.client_wg_pubkey);
+    // --- install the PSK into WireGuard ---
+    let first_install = !ctx.addrs.known(&hello.client_wg_pubkey);
+    let assigned_ip = match ctx.addrs.assign(&hello.client_wg_pubkey) {
+        Ok(ip) => ip,
+        Err(e) => {
+            reject(&mut stream, 0x08, &e.to_string())?;
+            return Err(ConnError::Install(e));
+        }
+    };
+    if let Err(e) = ctx.installer.install(
+        &hello.client_wg_pubkey,
+        &outcome.keys.psk,
+        assigned_ip,
+        hello.algo,
+        first_install,
+    ) {
+        reject(&mut stream, 0x08, &e.to_string())?;
+        return Err(ConnError::Install(e));
+    }
+
+    // --- record ---
     let sid_hex = hex::encode(session_id);
     let result = if rekey_session.is_some() {
-        sessions.apply_rekey(&session_id, hello.algo, outcome.keys.psk);
-        println!(
-            "REKEY      session={sid_hex}  algo={}  -> would swap PSK for wg peer {peer_hex}",
-            hello.algo.name()
-        );
+        ctx.sessions.apply_rekey(&session_id, hello.algo, outcome.keys.psk);
+        println!("REKEY      session={sid_hex}  algo={}  peer @ {assigned_ip}", hello.algo.name());
         ConnResult::Rekey { session_id }
     } else {
-        sessions.insert(Session {
+        ctx.sessions.insert(Session {
             session_id,
             peer_wg_pubkey: hello.client_wg_pubkey,
             in_force_algo: hello.algo,
@@ -131,21 +149,28 @@ pub fn handle_connection(
             rekeys: 0,
         });
         println!(
-            "HANDSHAKE  session={sid_hex}  algo={}  -> would install PSK for wg peer {peer_hex}  (sessions: {})",
+            "HANDSHAKE  session={sid_hex}  algo={}  peer @ {assigned_ip}  (sessions: {})",
             hello.algo.name(),
-            sessions.len()
+            ctx.sessions.len()
         );
         ConnResult::Handshake { session_id }
     };
 
-    // --- message 4: ServerFinish ---
+    // --- message 4: ServerFinish (with tunnel params) ---
     let server_tag = kdf::server_tag(&outcome.keys.confirm_key, &outcome.transcript);
-    Message::ServerFinish(ServerFinish { session_id, server_tag }).write(&mut stream)?;
+    Message::ServerFinish(ServerFinish {
+        session_id,
+        server_tag,
+        server_wg_pubkey: ctx.tunnel.server_wg_pubkey,
+        assigned_ip: assigned_ip.octets(),
+        wg_port: ctx.tunnel.wg_port,
+    })
+    .write(&mut stream)?;
 
     Ok(result)
 }
 
-fn reject<W: Write>(w: &mut W, code: u8, message: &str) -> std::io::Result<()> {
+fn reject<W: std::io::Write>(w: &mut W, code: u8, message: &str) -> std::io::Result<()> {
     Message::Error(ErrorMsg { code, message: message.to_string() }).write(w)
 }
 
@@ -154,6 +179,7 @@ pub enum ConnError {
     Io(std::io::Error),
     Frame(FrameError),
     Protocol(String),
+    Install(InstallError),
 }
 
 impl std::fmt::Display for ConnError {
@@ -162,6 +188,7 @@ impl std::fmt::Display for ConnError {
             ConnError::Io(e) => write!(f, "io: {e}"),
             ConnError::Frame(e) => write!(f, "frame: {e}"),
             ConnError::Protocol(m) => write!(f, "protocol: {m}"),
+            ConnError::Install(e) => write!(f, "psk install: {e}"),
         }
     }
 }

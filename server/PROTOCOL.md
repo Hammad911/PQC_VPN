@@ -147,8 +147,20 @@ replies `ServerFinish`.
 |---|---|---|
 | `session_id` | 16 | |
 | `server_tag` | 32 | `HMAC-SHA256(confirm_key, "server finished" ‖ transcript)` |
+| `server_wg_pubkey` | 32 | the server's WireGuard public key (raw, not base64) |
+| `assigned_ip` | 4 | IPv4 address the server assigned this peer inside the tunnel |
+| `wg_port` | 2 | UDP port the server's WireGuard listens on (big-endian) |
 
-Client installs the PSK on receipt. Both sides close the TCP connection.
+Only after `server_tag` verifies does the client trust the tunnel parameters.
+It then brings its WireGuard interface up with `Address = assigned_ip`,
+`Peer.PublicKey = server_wg_pubkey`, `Peer.PresharedKey = psk` (§5.3),
+`Peer.Endpoint = <handshake host>:wg_port`. The PSK is **never** on the wire —
+both sides derived it. Both sides close the TCP connection.
+
+The server installs the peer on its side before sending `ServerFinish`
+(`wg set <iface> peer <client_wg_pubkey> preshared-key … allowed-ips
+assigned_ip/32`, where `client_wg_pubkey` came from `ClientHello` §4.2); a rekey
+swaps only the preshared key and leaves `allowed-ips` alone.
 
 ### 4.6 `RekeyRequest` (0x05)
 

@@ -1,25 +1,34 @@
 [Unit]
 Description=PQC-VPN handshake server (PROTOCOL.md v1)
-After=network-online.target
+After=network-online.target wg-quick@wg0.service
 Wants=network-online.target
+Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple
 User=pqcvpn
 Group=pqcvpn
-ExecStart=/opt/pqc-vpn/handshake-server --bind 0.0.0.0:51821 --identity /var/lib/pqc-vpn/server-identity.seed
+ExecStart=/opt/pqc-vpn/handshake-server \
+    --bind 0.0.0.0:51821 \
+    --identity /var/lib/pqc-vpn/server-identity.seed \
+    --wg-interface wg0 \
+    --wg-port 51820 \
+    --tunnel-cidr 10.8.0.0/24
 Restart=on-failure
 RestartSec=2
+
+# needs CAP_NET_ADMIN to run `wg set` / `wg show` on wg0
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 
 # hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-PrivateDevices=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
 StateDirectory=pqc-vpn
 WorkingDirectory=/var/lib/pqc-vpn
 
