@@ -15,6 +15,24 @@ Source of truth for the crypto this protocol carries:
 `core/src/crypto/hybrid_kem.rs`, `core/src/crypto/auth.rs`,
 `contracts/algo_registry.json`.
 
+## Change log (for the Week 4 protocol-stability sync with Member 1)
+
+Everything below has been stable and implemented in `server/handshake-server/`
+since Week 2. `VER` is still `0x01`; no incompatible change has been made.
+
+| When | Change | Compatibility |
+|---|---|---|
+| Week 1 | Initial v1 draft: framing, 6 messages, transcript, key schedule, rekey rule | — |
+| Week 2 | Transcript definition pinned to include `client_nonce ‖ server_nonce` (§5.1) — this is the still-open ask to fold back into `core::build_handshake_transcript` (§8 Q1) | additive to `core`'s current function; wire format unchanged |
+| Week 3 | `ServerFinish` gained `server_wg_pubkey (32)`, `assigned_ip (4)`, `wg_port (2)` (§4.5) so the client needs no out-of-band tunnel config | **append-only** to one message; a `ServerFinish` reader written to the Week 2 layout would need updating, but no client existed yet |
+| Week 4 | No protocol change (containerisation only). This section added. | — |
+
+**For Member 1:** the client side of `core/protocol/` should be built against
+this document as of Week 4, and verified against `server/handshake-vectors.json`
+(regenerated Week 3). The only fields whose *encoding* is not yet 100% frozen are
+the ones in §8 — nonces-in-`core`, HKDF location — and those are additive, not
+wire-format changes.
+
 ---
 
 ## 1. Relationship to WireGuard

@@ -67,7 +67,13 @@ the same PSK, plus a dry-run PSK install and the returned tunnel params.
 
 ## Deploy
 
-`../deploy/deploy-handshake-server.sh` builds a release binary and installs it
-on the droplet as the `handshake-server` systemd service
-(`../deploy/handshake-server.service`). The identity seed lives at
-`/var/lib/pqc-vpn/server-identity.seed` and survives redeploys.
+**Primary (Week 4+):** `../deploy/deploy-docker.sh` — `docker compose up -d --build`
+on the droplet. `../Dockerfile` (multi-stage) + `../docker-compose.yml`
+(`network_mode: host`, `cap_drop: ALL` + `cap_add: NET_ADMIN`, `read_only`).
+
+**Fallback:** `../deploy/deploy-handshake-server.sh` — release binary +
+`handshake-server` systemd unit.
+
+Either way the ML-DSA-65 identity seed lives at
+`/var/lib/pqc-vpn/server-identity.seed` (a bind-mounted volume under Docker) and
+survives redeploys, so the pinned client key never changes.

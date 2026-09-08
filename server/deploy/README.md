@@ -9,12 +9,35 @@ deliverable, so every manual step gets captured as code as we go.
 
 ```
 deploy/
-├── README.md              this file
-├── wsl-setup.sh           local dev-environment setup (run in WSL, not on the VPS)
-├── provision.sh           run once on a fresh droplet as root
-├── wireguard-baseline.sh  run once after provision.sh — brings up wg0
-└── add-peer.sh            run per client — prints a ready client config
+├── README.md                  this file
+├── wsl-setup.sh               local dev-environment setup (run in WSL)
+├── provision.sh               run once on a fresh droplet as root
+├── wireguard-baseline.sh      run once after provision.sh — brings up wg0
+├── add-peer.sh                static test peer — prints a ready client config
+├── handshake-server.service   systemd unit (fallback — Docker is now primary)
+├── deploy-handshake-server.sh  systemd deploy (fallback)
+└── deploy-docker.sh           **primary** — containerised deploy (Week 4)
 ```
+
+## Deploying the handshake server (Week 4+): Docker
+
+```bash
+bash server/deploy/deploy-docker.sh          # from the repo root, in WSL
+```
+
+Installs Docker on the droplet if needed, ships the working tree as the build
+context, `docker compose up -d --build`. The container uses `network_mode: host`
+(required — it runs `wg set wg0`, and a kernel WireGuard interface is only
+reachable from its own netns) with every capability dropped except
+`CAP_NET_ADMIN`. `wg0`'s lifecycle stays on the host (`wg-quick@wg0.service`).
+
+The ML-DSA-65 identity is a bind-mounted volume at `/var/lib/pqc-vpn`, so the
+pinned key is unchanged across the switch from systemd and across container
+recreation. That directory is `chown`ed to `root` by the deploy script because
+the container runs as root with `cap_drop: ALL` — uid 0 no longer bypasses file
+permissions without `CAP_DAC_OVERRIDE`.
+
+Manage on the droplet: `cd /opt/pqc-vpn-src/server && sudo docker compose {ps,logs,restart,down}`.
 
 ---
 

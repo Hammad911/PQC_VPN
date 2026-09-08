@@ -1,0 +1,42 @@
+# PQC-VPN handshake server.
+#
+#   cd server && docker compose up -d --build
+#
+# Host networking is required: the server runs `wg set wg0`, and a kernel
+# WireGuard interface is only reachable from the network namespace it lives in
+# (the host's). The container therefore shares the host netns but drops every
+# capability except CAP_NET_ADMIN.
+#
+# wg0's lifecycle stays on the host (wg-quick@wg0.service). This container only
+# adds / updates peers on it.
+
+services:
+  handshake-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: pqc-vpn/handshake-server:latest
+    container_name: pqc-handshake-server
+    restart: unless-stopped
+
+    network_mode: host
+
+    cap_drop: ["ALL"]
+    cap_add: ["NET_ADMIN"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    volumes:
+      # ML-DSA-65 identity seed + derived .pub — must persist (pinned in clients)
+      - /var/lib/pqc-vpn:/var/lib/pqc-vpn
+
+    # command is baked into the image (see Dockerfile CMD); override here if a
+    # different interface / subnet is needed.
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

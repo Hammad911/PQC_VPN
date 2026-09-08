@@ -1076,6 +1076,66 @@ the returned tunnel params + derived PSK.
 Real `wg set` PSK injection working end to end against a throwaway client, live
 on the droplet. `core/` and `contracts/` untouched.
 
+## Week 4 (Member 2 track, 2026-09-08) — containerise the responder
+
+Assigned task (`TEAM_TIMELINE_PROPOSAL.md`): containerise the handshake
+responder (Docker); checkpoint — sync on protocol stability with Member 1.
+No code changes to `handshake-server` — packaging plus the protocol sync.
+
+### Docker
+
+- `server/Dockerfile` — multi-stage: `rust:1-slim-bookworm` builder (BuildKit
+  cache mounts) → `debian:bookworm-slim` runtime with `wireguard-tools` (the
+  server shells out to `wg`). Final image ~129 MB, Rust build ~1m49s on the
+  droplet.
+- `server/docker-compose.yml` — `network_mode: host` (**required**: `wg set wg0`
+  needs the netns wg0 lives in), `cap_drop: [ALL]` + `cap_add: [NET_ADMIN]`,
+  `security_opt: no-new-privileges`, `read_only: true` + `tmpfs: /tmp`,
+  `restart: unless-stopped`. Volume `/var/lib/pqc-vpn` → the ML-DSA-65 identity.
+- `.dockerignore` at the repo root (build context is the repo root).
+- `server/deploy/deploy-docker.sh` — installs Docker on the droplet if absent,
+  ships the working tree as the build context (works uncommitted), stops the
+  systemd service, `docker compose up -d --build`.
+
+One real bug found and fixed during deploy: the container runs as root but
+`cap_drop: ALL` removes `CAP_DAC_OVERRIDE`, so uid 0 no longer bypasses file
+permissions — reading the `pqcvpn`-owned `0600` identity seed failed with
+`EACCES`. Fix: the deploy script `chown`s `/var/lib/pqc-vpn` to `root`.
+
+### Verified
+
+- Redeployed to the droplet as the `pqc-handshake-server` container. Startup log
+  shows `psk install: wg set wg0` and `server wg pubkey hWFuGT6A2crU…` — the
+  container queried the host's wg0 public key from inside its netns, i.e.
+  `CAP_NET_ADMIN` reaches the host interface.
+- **Live handshake against the container** (`test-client` from WSL, ML-KEM-1024):
+  full 4-message exchange, PSK derived; container log
+  `HANDSHAKE session=… algo=ML-KEM-1024 peer @ 10.8.0.2`; `wg show wg0` shows the
+  new peer with a preshared key and `allowed ips: 10.8.0.2/32`.
+- **Identity persists across `docker compose restart`** — verifying key
+  `56d0ee98…` unchanged (volume). Same key as the Week 2/3 systemd deployments,
+  so no client re-pinning.
+- `cargo test --workspace --exclude desktop` — unchanged (core 20, handshake-server
+  17 unit + 4 integration).
+
+Known cosmetic issue: the in-memory address allocator resets on container
+recreation, so stale `wg0` peers with `allowed ips: (none)` accumulate. Peer
+lifecycle / cleanup is Week 5.
+
+### Protocol-stability sync (the Week 4 checkpoint)
+
+`server/PROTOCOL.md` gained a **Change log** section for Member 1: `VER` is still
+`0x01`; the only movements since the Week 1 draft are the Week 2 nonce addition
+to the transcript (an additive `core` ask, §8 Q1) and the Week 3 append-only
+`ServerFinish` fields. The client side of `core/protocol/` should now be built
+against this document and verified against `server/handshake-vectors.json`.
+
+### Status against the Week 4 mandate
+
+Responder containerised and running live on the droplet with a hardened compose
+config; protocol change log written for the Member 1 sync. `core/` and
+`contracts/` untouched.
+
 ## How to reproduce
 
 ```bash

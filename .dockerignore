@@ -1,0 +1,25 @@
+# Build context is the repo root (see server/Dockerfile). Keep every Cargo
+# manifest (cargo needs them to resolve the workspace) but drop the heavy and
+# irrelevant trees.
+
+.git
+target
+**/target
+
+# Python / RL side — not needed to build the Rust server
+venv
+__pycache__
+**/__pycache__
+*.pyc
+client/rl_agent/models
+notebooks
+dashboard
+
+# Node / Tauri frontend build output
+node_modules
+**/node_modules
+desktop/dist
+
+# local scratch
+*.log
+.DS_Store
