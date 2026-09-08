@@ -1,0 +1,46 @@
+[package]
+name = "handshake-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "PQC-VPN server-side handshake responder (PROTOCOL.md v1)"
+
+[lib]
+name = "handshake_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "handshake-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-client"
+path = "src/bin/test-client.rs"
+
+[[bin]]
+name = "emit-vectors"
+path = "src/bin/emit-vectors.rs"
+
+[dependencies]
+# Member 1's shared crate - the frozen crypto. Renamed because a package named
+# `core` shadows Rust's built-in `core`.
+vpn_core = { path = "../../core", package = "core" }
+
+# Pinned to the same versions the workspace lockfile already resolves for `core`,
+# so wire-format key/ciphertext/signature bytes are interchangeable with the
+# client side.
+ml-kem = "0.2.3"
+ml-dsa = { version = "0.1.1", features = ["getrandom"] }
+x25519-dalek = "2.0.1"
+sha2 = "0.10"
+rand = "0.8"
+
+# Key schedule (PROTOCOL.md 5.3) - lives here until the freeze meeting decides
+# whether it belongs in core (PROTOCOL.md 8, Q2).
+hkdf = "0.12"
+hmac = "0.12"
+
+hex = "0.4"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

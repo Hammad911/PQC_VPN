@@ -1,0 +1,27 @@
+[Unit]
+Description=PQC-VPN handshake server (PROTOCOL.md v1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pqcvpn
+Group=pqcvpn
+ExecStart=/opt/pqc-vpn/handshake-server --bind 0.0.0.0:51821 --identity /var/lib/pqc-vpn/server-identity.seed
+Restart=on-failure
+RestartSec=2
+
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+StateDirectory=pqc-vpn
+WorkingDirectory=/var/lib/pqc-vpn
+
+[Install]
+WantedBy=multi-user.target

@@ -927,6 +927,86 @@ provisioning pending the cloud account. WireGuard install: automated, pending
 the droplet. No changes to any other member's code; `core` and `contracts`
 untouched.
 
+## Week 2 (Member 2 track, 2026-09-08) — the handshake responder
+
+Assigned task (`TEAM_TIMELINE_PROPOSAL.md`): implement the server-side PQC
+handshake responder matching Member 1's client — same algorithm set, same
+ML-DSA-65 logic. Done, and running live on the droplet.
+
+### Week 1 close-out first
+
+- DigitalOcean droplet (`139.59.62.4`, Ubuntu 24.04, 1 GB) provisioned via
+  `server/deploy/provision.sh`: non-root `member2` user, root SSH disabled,
+  ufw (SSH + `51820/udp` + `51821/tcp`), unattended-upgrades, 2 GB swap.
+- Baseline WireGuard up (`server/deploy/wireguard-baseline.sh`) — plain
+  non-PQC `wg0`, `10.8.0.0/24`. Peer added, tunnel smoke-tested from WSL.
+
+### `server/handshake-server/` — new workspace crate
+
+Built on `vpn_core::crypto` (Member 1's port — pure-Rust `ml-kem`/`ml-dsa`, no
+liboqs). This crate is only the wire protocol around it.
+
+| module | role |
+|---|---|
+| `wire` | frame + message encode/decode (`PROTOCOL.md` §3–4), 8 unit tests |
+| `transcript` | the signed byte string (§5.1) — `core::build_handshake_transcript` plus the two nonces |
+| `kdf` | `HKDF-SHA256(hybrid_secret, nonces)` → `{psk, confirm_key}`, HMAC finish tags (§5.3) |
+| `identity` | long-term ML-DSA-65 key, persisted as its 32-byte seed; load-or-create |
+| `handshake` | server: `ClientHello` → `core::server_encapsulate` → sign → `ServerHello` |
+| `client_handshake` | client side, for the test client + vector emitter |
+| `session` | in-memory session table (rekey lookup; expands Week 5) |
+| `server` | blocking TCP accept loop, thread per connection |
+
+Binaries: `handshake-server` (the daemon), `test-client` (throwaway — the Week 3
+"throwaway client script", pulled forward), `emit-vectors`.
+
+### Verified
+
+- `cargo test -p handshake-server` — 13 unit + 4 integration.
+  `over_tcp_full_handshake` runs a real `TcpListener` handshake for
+  ML-KEM-512/768/1024 and asserts client and server derive the **same PSK**.
+  Negative tests: wrong pinned key → `AuthFailed`; tampered `ServerHello` →
+  `AuthFailed`.
+- **Live over the internet.** Deployed to the droplet as the `handshake-server`
+  systemd service (`server/deploy/deploy-handshake-server.sh` +
+  `handshake-server.service`, identity at `/var/lib/pqc-vpn/server-identity.seed`,
+  survives redeploys). `test-client` from WSL completed the full
+  `ClientHello → ServerHello → ClientFinish → ServerFinish` exchange for all
+  three levels and both ends derived matching PSKs; a client with a bogus pinned
+  key was correctly rejected.
+- `cargo test --workspace --exclude desktop` — core 20/20 unchanged, no warnings.
+
+### `server/handshake-vectors.json`
+
+Deterministic fixtures (framing, transcript + SHA-256, KDF outputs, finish MACs)
+for Member 1 to verify the client side of `core/protocol/` against the exact
+same bytes — same pattern as `contracts/*_vectors.json`. The KEM/DH/signature
+roundtrip is non-deterministic and is covered by `core`'s tests + the
+integration test instead.
+
+### Deliberately not done (later weeks)
+
+- No `wg set` PSK injection — Week 3. The server records the derived PSK and
+  logs "would install/swap PSK …" at the seam.
+- No `RekeyRequest` CLI — the server-side rekey path (`PROTOCOL.md` §6, incl. the
+  `REKEY_ESCALATES` no-downgrade rule) is coded and unit-tested; the client flag
+  is Week 6.
+- Replay cache / rate limiting — protocol fields exist, enforcement is Week 7.
+
+### For the freeze meeting
+
+`PROTOCOL.md` §8 now carries 7 items. New since the Week 1 draft: (7) add seed
+persistence to `core::ServerAuthenticator` so the server drops its direct
+`ml-dsa` use. Also flagged: adopting `HKDF` into `core` (§8 Q2) and the nonce
+addition to the transcript (§8 Q1) are both now needed by working code, not
+just proposed.
+
+### Status against the Week 2 mandate
+
+Responder implemented, matches the client's algorithm set and ML-DSA-65 identity
+model, tested three ways (unit, in-process integration, live over the internet),
+and deployed. No changes to `core/` or `contracts/`.
+
 ## How to reproduce
 
 ```bash

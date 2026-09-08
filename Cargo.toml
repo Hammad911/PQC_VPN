@@ -2,7 +2,8 @@
 members = [
     "core",
     "desktop/src-tauri",
-    "server/crypto-spike"
+    "server/crypto-spike",
+    "server/handshake-server"
 ]
 
 resolver = "2"
