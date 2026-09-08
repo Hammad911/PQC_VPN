@@ -629,6 +629,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-spike"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "ml-kem",
+]
+
+[[package]]
 name = "cssparser"
 version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

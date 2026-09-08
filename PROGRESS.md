@@ -773,6 +773,78 @@ measured decisions for the team rather than left as comments in code or
 resolved by fiat. `pytest tests/ -v` — 67/67 (66 prior + the new regression
 test) — and `contracts/manifest.json` regenerated and current.
 
+## Week 1 (Member 2 track, 2026-09-08) — orientation, Rust crypto validation, protocol draft
+
+Member 2's track (WireGuard + PQC handshake server, deployment) starts here.
+Per `TEAM_TIMELINE_PROPOSAL.md` the Week 1 tasks are: provision the VPS,
+install WireGuard, and draft the handshake wire protocol for the Week 1 sync
+(`TEAM_TIMELINE_PROPOSAL.md` §2 item 1).
+
+### What was already in place
+
+- **Member 1's `core/` crate already ports the crypto to Rust** — `core/src/crypto/`
+  has hybrid X25519+ML-KEM (512/768/1024), ML-DSA-65 auth, a zeroizing key
+  store, and `build_handshake_transcript` with the label `PQC-VPN-HANDSHAKE-v1`.
+  Built and tested in WSL: `cargo test -p core` → 20/20. It uses pure-Rust
+  crates (`ml-kem`, `ml-dsa`, `x25519-dalek`), **not liboqs** — so the server
+  shares this crate rather than linking a C library.
+- `core/src/protocol/`, `state/`, `rl/`, `anomaly/` are empty stubs. The wire
+  protocol is genuinely unbuilt and is Member 2's to define.
+- `contracts/INTEGRATION.md` confirms Member 2's only dependency on the RL track
+  is `algo_registry.json` (algorithm identifiers + rekey meaning).
+
+### `server/crypto-spike/` — toolchain validation (throwaway)
+
+A workspace-member binary that drives `core::crypto` the way the handshake
+responder will and prints the encoded size of every value that crosses the
+wire. `cargo run -p crypto-spike`. Confirms Member 2 can build against `core`,
+and produces the framing inputs for the protocol draft:
+
+| value | ML-KEM-512 | ML-KEM-768 | ML-KEM-1024 |
+|---|--:|--:|--:|
+| X25519 public (each way) | 32 | 32 | 32 |
+| ML-KEM public (client→server) | 800 | 1184 | 1568 |
+| ML-KEM ciphertext (server→client) | 768 | 1088 | 1568 |
+| ML-DSA-65 signature | 3309 | 3309 | 3309 |
+| signed transcript | 1662 | 2366 | 3231 |
+
+The 3.3 KB fixed ML-DSA-65 signature dominates `ServerHello` and rules out a
+single UDP datagram → the protocol uses TCP.
+
+### `server/PROTOCOL.md` — wire protocol v1 DRAFT
+
+For sign-off at the Week 1 sync. Defines: TCP on `51821/tcp` beside WireGuard's
+`51820/udp`; a 4-byte length-prefixed message header; five handshake messages
+(`ClientHello` / `ServerHello` / `ClientFinish` / `ServerFinish` / `RekeyRequest`)
+plus `Error`; the signed transcript (extends `core::build_handshake_transcript`
+with both nonces); ML-DSA-65 server identity pinned in the client; and
+`HKDF-SHA256(hybrid_secret, client_nonce‖server_nonce)` → `{psk, confirm_key}`
+so the WireGuard PSK and the finish-MAC key are independent.
+
+Open items carried to the freeze meeting (`PROTOCOL.md` §8): adding the nonces
+to the signed transcript (small `core` change), where HKDF lives (proposed:
+`core`), the proposal-vs-code disagreement on who holds the ML-KEM keypair
+(code is stronger, correct the proposal), the port number, and an explicit
+sign-off on `REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1 — a rekey may
+return a stronger algorithm; recommend approve).
+
+### `server/deploy/` — VPS provisioning
+
+Scripts + guide to take a fresh DigitalOcean Ubuntu droplet to a hardened host
+running a plain (non-PQC) WireGuard tunnel — the baseline Week 2 builds the PQC
+handshake onto. `provision.sh` (user creation, sshd hardening, ufw, auto
+updates, WireGuard, IP forwarding), `wireguard-baseline.sh` (wg0 up, NAT),
+`add-peer.sh` (per-client config). `wsl-setup.sh` sets up the local dev
+environment. The droplet itself is not yet created (needs the DigitalOcean
+account + $200 student credit).
+
+### Status against the Week 1 mandate
+
+Wire-protocol draft: done, ready for review. VPS: scripts and runbook done,
+provisioning pending the cloud account. WireGuard install: automated, pending
+the droplet. No changes to any other member's code; `core` and `contracts`
+untouched.
+
 ## How to reproduce
 
 ```bash

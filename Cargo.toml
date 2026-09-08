@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "core",
-    "desktop/src-tauri"
+    "desktop/src-tauri",
+    "server/crypto-spike"
 ]
 
 resolver = "2"
