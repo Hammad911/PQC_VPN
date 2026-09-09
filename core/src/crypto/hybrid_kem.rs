@@ -342,13 +342,43 @@ mod tests {
     use super::{
         build_handshake_transcript_512, build_handshake_transcript_768,
         build_handshake_transcript_1024, client_decapsulate_512, client_decapsulate_768,
-        client_decapsulate_1024, generate_client_keypairs_512, generate_client_keypairs_768,
-        generate_client_keypairs_1024, run_local_authenticated_handshake, server_encapsulate_512,
-        server_encapsulate_768, server_encapsulate_1024,
+        client_decapsulate_1024, combine_shared_secrets, generate_client_keypairs_512,
+        generate_client_keypairs_768, generate_client_keypairs_1024,
+        run_local_authenticated_handshake, server_encapsulate_512, server_encapsulate_768,
+        server_encapsulate_1024,
     };
 
     use crate::crypto::MlKemLevel;
     use crate::crypto::auth::ServerAuthenticator;
+
+    fn to_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    #[test]
+    fn combine_shared_secrets_matches_python_reference_vectors() {
+        // Parity check against the Python port (Week 2 of the delivery plan).
+        // `combine_shared_secrets` is the one deterministic piece of Phase 1:
+        // ML-KEM and ML-DSA key generation are not reproducible across
+        // implementations, so those layers are covered by the round-trip
+        // tests above and by `server/handshake-vectors.json` instead. Both
+        // expected digests were computed with CPython:
+        //
+        //   hashlib.sha256(x25519_secret + mlkem_secret).hexdigest()
+
+        assert_eq!(
+            to_hex(&combine_shared_secrets(&[1_u8; 32], &[2_u8; 32])),
+            "f818afd37a6dc3bc92fb44731011277006db4efa6e9023cd7468c02335d22a4d"
+        );
+
+        let x25519_secret: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let mlkem_secret: [u8; 32] = std::array::from_fn(|i| (i + 32) as u8);
+
+        assert_eq!(
+            to_hex(&combine_shared_secrets(&x25519_secret, &mlkem_secret)),
+            "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"
+        );
+    }
 
     #[test]
     fn hybrid_x25519_ml_kem_768_secrets_match() {

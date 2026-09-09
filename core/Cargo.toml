@@ -3,6 +3,12 @@ name = "core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Exposes `core::state::mock` outside of tests so the desktop wiring
+# (Weeks 5-9) and downstream integration can build against a stub before the
+# real platform implementations land.
+mock = []
+
 [dependencies]
 kem = "0.3.0-pre.0"
 ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
