@@ -48,7 +48,11 @@ class StateObserver:
         """Call this whenever the agent triggers a key re-exchange."""
         self._last_rekey_time = time.monotonic()
 
-    def _cpu_load(self) -> float:
+    def cpu_load(self) -> float:
+        """Public — the anomaly combiner (anomaly_detector.py) needs the same
+        live CPU reading *before* read_state() runs, to gate Layer 2 on the
+        same value read_state() will end up reporting, rather than taking a
+        second, differently-timed psutil.cpu_percent() sample."""
         return psutil.cpu_percent(interval=0.1) / 100.0
 
     def _ram_available(self) -> float:
@@ -109,13 +113,20 @@ class StateObserver:
         elapsed = time.monotonic() - self._last_rekey_time
         return min(elapsed / REKEY_INTERVAL_CAP_SEC, 1.0)
 
-    def read_state(self, threat_score: float = 0.0) -> np.ndarray:
+    def read_state(self, threat_score: float = 0.0, cpu_load: float = None) -> np.ndarray:
         """threat_score comes from the anomaly detection pipeline
         (client/rl_agent/anomaly_detector.py) — passed in rather than
-        computed here so the two subsystems stay decoupled."""
+        computed here so the two subsystems stay decoupled.
+
+        cpu_load: pass in a value already read via cpu_load() (e.g. the one
+        a caller fed into AnomalyCombiner's CPU gate) to avoid a second,
+        differently-timed psutil.cpu_percent() sample. Defaults to reading
+        it fresh, same as before this parameter existed."""
+        if cpu_load is None:
+            cpu_load = self.cpu_load()
         vector = np.array(
             [
-                self._cpu_load(),
+                cpu_load,
                 self._ram_available(),
                 self._latency(),
                 self._upload_volume(),

@@ -77,7 +77,7 @@
       "name": "THREAT",
       "range": "0=none, 1=confirmed anomaly",
       "semantics": "Combined anomaly score across whichever detection layers the CPU gate allows; the consumer never needs to know which are active",
-      "produced_by": "anomaly_detector.py (Layer 1 today; Layers 2/3 land Weeks 5-8)"
+      "produced_by": "anomaly_detector.py (Layers 1-2 combined under the CPU gate today; Layer 3 lands later)"
     }
   ]
 }
