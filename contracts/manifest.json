@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "generated_by": "python -m client.rl_agent.export_contracts",
-  "generated_at_utc": "2026-09-07T18:27:08Z",
+  "generated_at_utc": "2026-09-11T06:06:07Z",
   "git_commit": {
-    "head": "f21d89963135c2c25aac097d95cd6d2cd15839f3",
+    "head": "b5e12844b5be6b333066ff494e0dcfedc5feda18",
     "tree_dirty": true,
     "note": "generated from the working tree; when tree_dirty is true the artifacts do not correspond to `head` but to the commit made immediately after it"
   },
@@ -14,8 +14,8 @@
       "bytes": 1694
     },
     "contracts/state_vector.json": {
-      "sha256": "5efa99cdc2d1f616fb4ebc61d9c56bc402d19257b85be94bab506bfc0e0ae5e3",
-      "bytes": 2560
+      "sha256": "52bef7c99ec5ab80e0aca4aacc9216f2a87a4170f175ec22b00ef94481e922f3",
+      "bytes": 2585
     },
     "contracts/policy_test_vectors.json": {
       "sha256": "4bc76fe6cbd9a048c18d5b667bbfa69d1b2d7731e9f7ddd77074aadadf11bdfb",

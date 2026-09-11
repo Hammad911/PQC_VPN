@@ -7,9 +7,11 @@ algorithm, timed.
 Ties Phase 1 (client/vpn_daemon/) and Phase 2 (client/rl_agent/)
 together into one runnable script.
 
-What's genuinely live: the Layer 1 Z-score anomaly check, the agent's
-forward pass, and the crypto handshake itself (real key generation,
-encapsulation, decapsulation — timed as it happens).
+What's genuinely live: the anomaly combiner (Layer 1's Z-score baseline,
+always on, plus the Layer 2 rule-based signatures below 70% CPU — this
+laptop's own CPU load decides whether Layer 2 runs, same as it would in
+production), the agent's forward pass, and the crypto handshake itself
+(real key generation, encapsulation, decapsulation — timed as it happens).
 
 What's staged, and printed as [STAGED]: CPU/RAM/connection-type/session
 -age, and in two scenarios the threat score. A laptop demo can't hop
@@ -36,7 +38,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from stable_baselines3 import PPO
 
-from client.rl_agent.anomaly_detector import ZScoreBaseline
+from client.rl_agent.anomaly_detector import AnomalyCombiner
 from client.rl_agent.state_observer import StateObserver
 from client.rl_agent.vpn_env import (
     CPU_LOAD, RAM_AVAIL, CONN_TYPE, TIME_SINCE_REKEY, THREAT, optimal_action,
@@ -47,6 +49,20 @@ from client.vpn_daemon.hybrid_kem import HybridKEM
 
 MODEL_PATH = "client/rl_agent/models/ppo_vpn_agent.zip"
 ACTION_INDEX = {i: k for i, k in enumerate(ACTIVE_ACTIONS.keys())}
+
+# Benign per-tick Layer 2 inputs for scenarios that aren't specifically
+# injecting a Layer 2 signature — keeps every run_round() call below every
+# signature's trigger line (see anomaly_detector.py for the thresholds).
+NORMAL_LAYER2 = dict(
+    distinct_ports=2, connection_attempts=2, failed_attempts=0,
+    retransmit_rate=0.0, latency_ms=10.0,
+    upload_bytes_per_sec=1_000.0, download_bytes_per_sec=1_000.0,
+    dns_server="1.1.1.1",
+)
+# A synthetic port-scan pattern (PortScanSignature's own trigger example) —
+# high fanout, mostly-failed connections.
+PORT_SCAN_LAYER2 = {**NORMAL_LAYER2,
+                     "distinct_ports": 20, "connection_attempts": 20, "failed_attempts": 18}
 
 
 def banner(text):
@@ -100,7 +116,7 @@ def demo_server_auth():
 
 
 def run_round(label, model, observer, detector, *, staged, current_algo,
-              inject_anomaly=False):
+              inject_anomaly=False, inject_port_scan=False):
     """staged: dict of {index: value} overriding the live-read state,
     e.g. {CPU_LOAD: 0.2, CONN_TYPE: 1.0}.
 
@@ -111,16 +127,30 @@ def run_round(label, model, observer, detector, *, staged, current_algo,
     """
     banner(f"SCENARIO: {label}")
 
+    # One live CPU sample, shared between the combiner's Layer 2 gate and
+    # the state vector's CPU_LOAD dimension — see state_observer.cpu_load().
+    cpu = observer.cpu_load()
+
     if inject_anomaly:
         # calibrate a normal baseline, then feed one outlier — this is the
         # real Layer 1 Z-score detector reacting, not a hardcoded number
         for _ in range(25):
-            detector.update(latency=0.1, packet_rate=0.1, packet_size=0.1)
-        result = detector.update(latency=0.1, packet_rate=0.1, packet_size=50.0)
+            detector.update(cpu_load=cpu, latency=0.1, packet_rate=0.1,
+                             packet_size=0.1, **NORMAL_LAYER2)
+        result = detector.update(cpu_load=cpu, latency=0.1, packet_rate=0.1,
+                                  packet_size=50.0, **NORMAL_LAYER2)
+    elif inject_port_scan:
+        # the real Layer 2 PortScanSignature reacting, gated live by this
+        # laptop's own current CPU load (see the [STAGED] cpu note below —
+        # only the printed/agent-facing CPU_LOAD is staged, the gate always
+        # uses the real reading).
+        result = detector.update(cpu_load=cpu, latency=0.1, packet_rate=0.1,
+                                  packet_size=0.12, **PORT_SCAN_LAYER2)
     else:
-        result = detector.update(latency=0.1, packet_rate=0.1, packet_size=0.12)
+        result = detector.update(cpu_load=cpu, latency=0.1, packet_rate=0.1,
+                                  packet_size=0.12, **NORMAL_LAYER2)
 
-    state = observer.read_state(threat_score=result["threat_score"])
+    state = observer.read_state(threat_score=result["threat_score"], cpu_load=cpu)
 
     STATE_NAMES = {
         CPU_LOAD: "cpu", RAM_AVAIL: "ram_avail", CONN_TYPE: "conn_type",
@@ -135,7 +165,7 @@ def run_round(label, model, observer, detector, *, staged, current_algo,
         f"state  cpu={state[0]:.2f}  ram_avail={state[1]:.2f}  "
         f"latency={state[2]:.2f} (live ping)  upload={state[3]:.2f}  "
         f"conn_type={state[4]:.2f}  time_since_rekey={state[5]:.2f}  "
-        f"threat={state[6]:.2f} (live Z-score)"
+        f"threat={state[6]:.2f} (live combiner: Layer 1 + Layer 2 below 70% CPU)"
     )
 
     action, _ = model.predict(state, deterministic=True)
@@ -180,7 +210,7 @@ def main():
     print("Loading trained PPO agent...")
     model = PPO.load(MODEL_PATH)
     observer = StateObserver()
-    detector = ZScoreBaseline(window=20)
+    detector = AnomalyCombiner(window=20)
 
     demo_server_auth()
 
@@ -222,6 +252,17 @@ def main():
         model, observer, detector, current_algo=current_algo,
         staged={CPU_LOAD: 0.3, RAM_AVAIL: 0.65, CONN_TYPE: 0.0,
                 TIME_SINCE_REKEY: 0.0, THREAT: 0.1},
+    )
+    # Sixth scenario, appended rather than interleaved so it can't perturb
+    # the current_algo chain the five reward-checked scenarios above rely
+    # on. THREAT is deliberately left unstaged — the combiner's real Layer 2
+    # PortScanSignature is what drives it, gated live by this machine's
+    # actual (low, idle-demo) CPU load, not a hardcoded number.
+    run_round(
+        "reconnaissance sweep against an idle host (Layer 2 port-scan signature fires live)",
+        model, observer, detector, current_algo=current_algo,
+        staged={CPU_LOAD: 0.2, RAM_AVAIL: 0.7, CONN_TYPE: 0.5, TIME_SINCE_REKEY: 0.2},
+        inject_port_scan=True,
     )
 
     banner("done")

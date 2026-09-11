@@ -855,6 +855,104 @@ metadata.
 
 `pytest tests/ -v` — 87/87 (69 prior + 18 new).
 
+## Week 6 (Member 3 track, 2026-09-11) — the anomaly combiner
+
+`TEAM_TIMELINE_PROPOSAL.md`'s Week 6 task: "Wire Layer 2 into the CPU-gated
+combiner (< 70% CPU) alongside the existing always-on Layer 1. Unit tests per
+signature (inject a synthetic port-scan pattern, confirm it fires; inject
+normal traffic, confirm it doesn't)." The per-signature half of that already
+shipped early, in Week 5's `test_phase5.py` — what was still outstanding, and
+flagged explicitly in two places (`anomaly_detector.py`'s own module
+docstring, and `contracts/state_vector.json`'s `THREAT` field description) is
+the combiner itself.
+
+### `AnomalyCombiner` (`client/rl_agent/anomaly_detector.py`)
+
+Owns one `ZScoreBaseline` (Layer 1, always active) and the five Layer 2
+signatures, gated by a new `LAYER2_CPU_GATE = 0.70` constant — normalized
+`[0,1]`, matching `StateObserver.cpu_load()`'s units, not raw 0–100.
+
+- `update(cpu_load, **metrics)`: Layer 1 always runs. The five Layer 2
+  signatures run only when `cpu_load < LAYER2_CPU_GATE`; when gated off they
+  are simply not called that tick, so a transient CPU spike doesn't reset or
+  falsely advance a streak-based signature's internal state — it just sits
+  the tick out.
+- Combines every *active and `ready`* layer's `threat_score` with `max()`,
+  not an average — one confirmed signature shouldn't get diluted by four
+  quiet ones, and `max` is what makes the THREAT contract's own promise
+  ("the consumer never needs to know which are active") actually hold
+  regardless of how many layers are on.
+- Returns the module's usual `{anomalous, threat_score, ready, detail}`
+  shape (`ready` mirrors Layer 1's own `ready`, the always-on floor every
+  prior direct-`ZScoreBaseline` caller relied on); `detail` additionally
+  carries `layer2_active` and a per-layer result breakdown for debugging and
+  tests.
+
+### `StateObserver.cpu_load()` (`client/rl_agent/state_observer.py`)
+
+Promoted from `_cpu_load()` to public, since the combiner's CPU gate needs
+the same live reading *before* `read_state()` runs. `read_state()` also
+gained an optional `cpu_load` parameter so a caller that already sampled it
+for the gate doesn't pay for a second, differently-timed
+`psutil.cpu_percent()` call — defaults to sampling fresh if omitted, so every
+existing caller is unaffected.
+
+### `demo.py`
+
+`run_round()` now drives `AnomalyCombiner` instead of a bare `ZScoreBaseline`,
+sharing one live CPU sample between the gate and the state vector. A sixth
+scenario, appended after the original five (so it can't perturb the
+`current_algo` chain they thread through each other), stages a synthetic
+port-scan pattern and lets Layer 2's real `PortScanSignature` drive `THREAT`
+live rather than a staged number — module docstring's "what's genuinely live"
+list updated to match.
+
+### Contracts
+
+`python -m client.rl_agent.export_contracts` re-run after bumping the
+`THREAT` field's `produced_by` text (was "Layer 1 today; Layers 2/3 land
+Weeks 5-8", now reflects Layer 2 landing). Diff against the prior
+`contracts/` is exactly that one string plus the manifest's
+timestamp/head/hash metadata — nothing else moved.
+
+### Tests — `tests/test_phase6.py` (new, 7 tests)
+
+Combiner-level, as `test_phase5.py` explicitly deferred: CPU-gate boundary
+(active just below the gate, inert at/above it), combined `threat_score` is
+the `max` across two simultaneously-firing signatures (not a sum, which would
+either overshoot `[0,1]` or under-report), a gated-off tick neither resets
+nor advances a streak-based signature's counter, a not-yet-`ready` Layer 2
+signature doesn't suppress a real Layer 1 hit, a structural shape check, and
+a regression-parity test — `AnomalyCombiner` with CPU held below the gate and
+no Layer 2 signature triggering reproduces a bare `ZScoreBaseline`'s output
+exactly, which is what makes the `demo.py` swap safe.
+
+`pytest tests/ -v` — 94/94 (87 prior + 7 new). `python demo.py` — full run;
+all five original scenarios still "matches the optimal choice" (the
+regression-parity guarantee holding end to end, not just in the unit test),
+sixth scenario shows `threat=0.64` driven live by the port-scan signature.
+
+### Deliberately not done (later weeks)
+
+- No live network/packet-capture sourcing for the Layer 2 inputs (distinct
+  ports, retransmit rate, DNS server, etc.) — they stay plain caller-supplied
+  numbers, the same decoupling-from-`psutil` stance Layer 1 has had since
+  Week 1. A real packet-capture/`netstat` source is materially bigger and
+  platform-specific, and — like `StateObserver`'s own live psutil reads —
+  has no live daemon to call it yet.
+- Layer 3 (Isolation Forest) — Week 7 per the timeline.
+- Rust-side integration of the combiner's output into `core`'s state
+  pipeline — a later, separate checkpoint item (Member 1's "Integrate Member
+  3's anomaly `threat_score` combiner into the state pipeline",
+  `TEAM_TIMELINE_PROPOSAL.md`). `core/` and `server/` untouched this week.
+
+### Status against the Week 6 mandate
+
+Layer 2 wired into a CPU-gated combiner alongside Layer 1, combiner-level
+integration tests written (not just per-signature ones, which already
+existed), and the whole thing exercised end-to-end live in `demo.py` with no
+change to the five existing scenarios' agent decisions.
+
 ## Week 1 (Member 2 track, 2026-09-08) — orientation, Rust crypto validation, protocol draft
 
 Member 2's track (WireGuard + PQC handshake server, deployment) starts here.

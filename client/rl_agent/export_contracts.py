@@ -127,7 +127,8 @@ def build_state_vector() -> dict:
         (THREAT, "THREAT", "0=none, 1=confirmed anomaly",
          "Combined anomaly score across whichever detection layers the CPU gate "
          "allows; the consumer never needs to know which are active",
-         "anomaly_detector.py (Layer 1 today; Layers 2/3 land Weeks 5-8)", None),
+         "anomaly_detector.py (Layers 1-2 combined under the CPU gate today; "
+         "Layer 3 lands later)", None),
     ]
 
     return {
