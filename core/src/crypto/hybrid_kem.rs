@@ -214,9 +214,19 @@ pub fn combine_shared_secrets(x25519_secret: &[u8], mlkem_secret: &[u8]) -> [u8;
 
 /// Builds the handshake bytes signed by the server.
 ///
-/// K determines the selected ML-KEM parameter set.
+/// K determines the selected ML-KEM parameter set. `client_nonce` and
+/// `server_nonce` are the two freshness values `server/PROTOCOL.md` §5.1
+/// adds to the transcript (Week 4 checkpoint, §8 Q1) — without them, a
+/// captured `ServerHello` would sign the same bytes on every handshake for
+/// a given key pair, which is not itself exploitable here (the KEM
+/// ciphertext and X25519 keys are already fresh per handshake) but is worth
+/// closing since the wire protocol commits to it. Layout matches
+/// `server/handshake-server/src/transcript.rs::build` exactly, byte for
+/// byte, so the two sides can never drift.
 pub fn build_handshake_transcript<K: KemCore>(
     algorithm_name: &[u8],
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
     client_keys: &HybridClientKeys<K>,
     server_x25519_public: &PublicKey,
     ciphertext: &::ml_kem::Ciphertext<K>,
@@ -229,6 +239,9 @@ pub fn build_handshake_transcript<K: KemCore>(
 
     transcript.extend_from_slice(PROTOCOL_LABEL);
     transcript.extend_from_slice(algorithm_name);
+
+    transcript.extend_from_slice(client_nonce);
+    transcript.extend_from_slice(server_nonce);
 
     transcript.extend_from_slice(client_keys.x25519_public.as_bytes());
 
@@ -243,12 +256,16 @@ pub fn build_handshake_transcript<K: KemCore>(
 
 /// Builds a signed transcript for ML-KEM-512.
 pub fn build_handshake_transcript_512(
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
     client_keys: &HybridClientKeys512,
     server_x25519_public: &PublicKey,
     ciphertext: &MlKem512Ciphertext,
 ) -> Vec<u8> {
     build_handshake_transcript::<MlKem512>(
         b"ML-KEM-512",
+        client_nonce,
+        server_nonce,
         client_keys,
         server_x25519_public,
         ciphertext,
@@ -257,12 +274,16 @@ pub fn build_handshake_transcript_512(
 
 /// Builds a signed transcript for ML-KEM-768.
 pub fn build_handshake_transcript_768(
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
     client_keys: &HybridClientKeys768,
     server_x25519_public: &PublicKey,
     ciphertext: &MlKem768Ciphertext,
 ) -> Vec<u8> {
     build_handshake_transcript::<MlKem768>(
         b"ML-KEM-768",
+        client_nonce,
+        server_nonce,
         client_keys,
         server_x25519_public,
         ciphertext,
@@ -271,16 +292,31 @@ pub fn build_handshake_transcript_768(
 
 /// Builds a signed transcript for ML-KEM-1024.
 pub fn build_handshake_transcript_1024(
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
     client_keys: &HybridClientKeys1024,
     server_x25519_public: &PublicKey,
     ciphertext: &MlKem1024Ciphertext,
 ) -> Vec<u8> {
     build_handshake_transcript::<MlKem1024>(
         b"ML-KEM-1024",
+        client_nonce,
+        server_nonce,
         client_keys,
         server_x25519_public,
         ciphertext,
     )
+}
+
+/// Generates a fresh 32-byte handshake nonce.
+pub fn generate_nonce() -> [u8; 32] {
+    use rand::RngCore;
+
+    let mut nonce = [0_u8; 32];
+
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+
+    nonce
 }
 
 /// Runs one local authenticated hybrid handshake for K.
@@ -295,8 +331,13 @@ fn run_local_handshake_for<K: KemCore>(algorithm_name: &[u8]) -> Result<[u8; 32]
     let server_result =
         server_encapsulate::<K>(client_keys.x25519_public(), client_keys.mlkem_public())?;
 
+    let client_nonce = generate_nonce();
+    let server_nonce = generate_nonce();
+
     let transcript = build_handshake_transcript::<K>(
         algorithm_name,
+        &client_nonce,
+        &server_nonce,
         &client_keys,
         &server_result.server_x25519_public,
         &server_result.ciphertext,
@@ -343,7 +384,7 @@ mod tests {
         build_handshake_transcript_512, build_handshake_transcript_768,
         build_handshake_transcript_1024, client_decapsulate_512, client_decapsulate_768,
         client_decapsulate_1024, combine_shared_secrets, generate_client_keypairs_512,
-        generate_client_keypairs_768, generate_client_keypairs_1024,
+        generate_client_keypairs_768, generate_client_keypairs_1024, generate_nonce,
         run_local_authenticated_handshake, server_encapsulate_512, server_encapsulate_768,
         server_encapsulate_1024,
     };
@@ -448,6 +489,8 @@ mod tests {
 
         // Server constructs the exact public handshake transcript.
         let transcript = build_handshake_transcript_768(
+            &[9_u8; 32],
+            &[10_u8; 32],
             &client_keys,
             &server_result.server_x25519_public,
             &server_result.ciphertext,
@@ -484,6 +527,8 @@ mod tests {
                 .expect("Server encapsulation failed");
 
         let transcript = build_handshake_transcript_768(
+            &[9_u8; 32],
+            &[10_u8; 32],
             &client_keys,
             &server_result.server_x25519_public,
             &server_result.ciphertext,
@@ -560,6 +605,8 @@ mod tests {
                 .expect("ML-KEM-512 server encapsulation failed");
 
         let transcript = build_handshake_transcript_512(
+            &[9_u8; 32],
+            &[10_u8; 32],
             &client_keys,
             &server_result.server_x25519_public,
             &server_result.ciphertext,
@@ -593,6 +640,8 @@ mod tests {
                 .expect("ML-KEM-1024 server encapsulation failed");
 
         let transcript = build_handshake_transcript_1024(
+            &[9_u8; 32],
+            &[10_u8; 32],
             &client_keys,
             &server_result.server_x25519_public,
             &server_result.ciphertext,
@@ -613,6 +662,46 @@ mod tests {
         .expect("ML-KEM-1024 client decapsulation failed");
 
         assert_eq!(client_secret, server_result.hybrid_secret);
+    }
+
+    #[test]
+    fn generated_nonces_are_not_repeated() {
+        // Not a strength proof (that's OsRng's job) - just a smoke check that
+        // two calls do not return the all-zero buffer or each other.
+        let a = generate_nonce();
+        let b = generate_nonce();
+
+        assert_ne!(a, [0_u8; 32]);
+        assert_ne!(b, [0_u8; 32]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn transcript_places_nonces_right_after_the_algorithm_name() {
+        // Layout pinned to match server/handshake-server/src/transcript.rs::build
+        // byte for byte (server/PROTOCOL.md §5.1, Week 4 checkpoint §8 Q1):
+        // label(20) || algo_name || client_nonce(32) || server_nonce(32) || ...
+        let client_keys = generate_client_keypairs_768();
+
+        let server_result =
+            server_encapsulate_768(client_keys.x25519_public(), client_keys.mlkem_public())
+                .expect("Server encapsulation failed");
+
+        let client_nonce = [11_u8; 32];
+        let server_nonce = [22_u8; 32];
+
+        let transcript = build_handshake_transcript_768(
+            &client_nonce,
+            &server_nonce,
+            &client_keys,
+            &server_result.server_x25519_public,
+            &server_result.ciphertext,
+        );
+
+        assert_eq!(&transcript[..20], b"PQC-VPN-HANDSHAKE-v1");
+        assert_eq!(&transcript[20..30], b"ML-KEM-768");
+        assert_eq!(&transcript[30..62], &client_nonce);
+        assert_eq!(&transcript[62..94], &server_nonce);
     }
 
     #[test]

@@ -16,8 +16,8 @@ use ml_kem::{EncodedSizeUser, KemCore, MlKem512, MlKem768, MlKem1024};
 use vpn_core::crypto::MlKemLevel;
 use vpn_core::crypto::auth::ServerAuthenticator;
 use vpn_core::crypto::hybrid_kem::{
-    build_handshake_transcript, client_decapsulate, generate_client_keypairs, run_local_authenticated_handshake,
-    server_encapsulate,
+    build_handshake_transcript, client_decapsulate, generate_client_keypairs, generate_nonce,
+    run_local_authenticated_handshake, server_encapsulate,
 };
 
 fn hex8(bytes: &[u8]) -> String {
@@ -44,9 +44,12 @@ where
         server_encapsulate::<K>(client_keys.x25519_public(), client_keys.mlkem_public())
             .expect("server encapsulation failed");
 
-    // Server signs the exact public transcript.
+    // Server signs the exact public transcript (client_nonce/server_nonce
+    // added in the Week 4 checkpoint, server/PROTOCOL.md §5.1/§8 Q1).
     let transcript = build_handshake_transcript::<K>(
         name.as_bytes(),
+        &generate_nonce(),
+        &generate_nonce(),
         &client_keys,
         &server_result.server_x25519_public,
         &server_result.ciphertext,

@@ -6,9 +6,10 @@ publish = false
 description = "Throwaway Week 1 validation: exercise core::crypto and print wire sizes (not the server)"
 
 [dependencies]
-# Member 1's shared crate. Renamed on import because a package literally named
-# `core` shadows Rust's built-in `core` crate.
-vpn_core = { path = "../../core", package = "core" }
+# Member 1's shared crate. The package itself is named `vpn_core` as of the
+# Week 4 checkpoint (it used to be `core`, which shadowed Rust's built-in
+# `core` and needed a `package = "core"` alias here).
+vpn_core = { path = "../../core" }
 
 # Same version the workspace lockfile already pins for `core`, so the concrete
 # ML-KEM key / ciphertext types line up. Used for the parameter-set marker types

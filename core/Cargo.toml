@@ -1,5 +1,5 @@
 [package]
-name = "core"
+name = "vpn_core"
 version = "0.1.0"
 edition = "2024"
 
@@ -10,6 +10,7 @@ edition = "2024"
 mock = []
 
 [dependencies]
+hkdf = "0.12"
 kem = "0.3.0-pre.0"
 ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
 ml-kem = "0.2.3"

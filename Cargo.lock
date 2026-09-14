@@ -513,19 +513,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core"
-version = "0.1.0"
-dependencies = [
- "kem",
- "ml-dsa",
- "ml-kem",
- "rand",
- "sha2",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,8 +619,8 @@ dependencies = [
 name = "crypto-spike"
 version = "0.1.0"
 dependencies = [
- "core",
  "ml-kem",
+ "vpn_core",
 ]
 
 [[package]]
@@ -1561,7 +1548,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "core",
  "hex",
  "hkdf",
  "hmac",
@@ -1571,6 +1557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "vpn_core",
  "x25519-dalek",
 ]
 
@@ -4484,6 +4471,20 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vpn_core"
+version = "0.1.0"
+dependencies = [
+ "hkdf",
+ "kem",
+ "ml-dsa",
+ "ml-kem",
+ "rand",
+ "sha2",
+ "x25519-dalek",
+ "zeroize",
+]
 
 [[package]]
 name = "vswhom"

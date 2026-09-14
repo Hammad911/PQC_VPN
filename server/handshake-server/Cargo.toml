@@ -22,9 +22,10 @@ name = "emit-vectors"
 path = "src/bin/emit-vectors.rs"
 
 [dependencies]
-# Member 1's shared crate - the frozen crypto. Renamed because a package named
-# `core` shadows Rust's built-in `core`.
-vpn_core = { path = "../../core", package = "core" }
+# Member 1's shared crate - the frozen crypto. The package itself is named
+# `vpn_core` as of the Week 4 checkpoint (it used to be `core`, which shadowed
+# Rust's built-in `core` and needed a `package = "core"` alias here).
+vpn_core = { path = "../../core" }
 
 # Pinned to the same versions the workspace lockfile already resolves for `core`,
 # so wire-format key/ciphertext/signature bytes are interchangeable with the
