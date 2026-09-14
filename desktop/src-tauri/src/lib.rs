@@ -1,12 +1,16 @@
-//! Tauri desktop shell — plan Week 4: window + system tray + a
-//! connect/disconnect button wired to a stub.
+//! Tauri desktop shell.
 //!
-//! Deliberately not real yet. `core::state`'s `DeviceState` / `TunnelHandle`
-//! traits (Week 3) get actual desktop implementations in Weeks 5 and 9, once
-//! there is a real handshake (Week 6) and a trained policy wired in
-//! (Week 7) to drive them. This shell exists to prove the UI can drive Rust
-//! state through Tauri's command layer before any of that lands — exactly
-//! what the plan's Week 4 task asks for.
+//! Week 4: window + system tray + a connect/disconnect button wired to a
+//! stub. Week 5: `device_state` implements `core::state::DeviceState` for
+//! real, using `sysinfo` — this module wires it into a Tauri command so the
+//! frontend can show live numbers.
+//!
+//! What's still a stub: `core::state`'s `TunnelHandle` trait gets a real
+//! desktop implementation in Week 9, once there is a real handshake
+//! (Week 6) and a trained policy wired in (Week 7) to drive it.
+//! `connect`/`disconnect` below still just flip an in-memory flag.
+
+mod device_state;
 
 use std::sync::Mutex;
 
@@ -14,6 +18,9 @@ use serde::Serialize;
 use tauri::State;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use vpn_core::state::DeviceState;
+
+use device_state::SysinfoDeviceState;
 
 /// Connection state the frontend can read and drive.
 ///
@@ -36,6 +43,53 @@ enum ConnectionStatus {
 /// App-wide state, managed by Tauri and shared across command invocations.
 struct AppState {
     status: Mutex<ConnectionStatus>,
+    device: SysinfoDeviceState,
+}
+
+/// A `DeviceState` reading, shaped for the frontend. Plain fields rather
+/// than reusing `vpn_core::state::ConnectionType` directly — `core` does not
+/// (and should not) depend on `serde`, so the enum has no `Serialize` impl;
+/// its `Debug` output ("Wired" / "WifiOrUnknown" / "Cellular") is sent
+/// as-is instead.
+#[derive(Debug, Clone, Serialize)]
+struct DeviceSnapshot {
+    cpu_load: f32,
+    ram_available_fraction: f32,
+    /// `None` when the latency probe's target was unreachable.
+    latency_ms: Option<f64>,
+    upload_rate_bytes_per_sec: f64,
+    connection_type: String,
+}
+
+/// Reads the five `DeviceState` values live from this machine. No caching,
+/// no averaging — one on-demand snapshot per call, which is why the
+/// frontend puts this behind a "Refresh" button rather than polling it.
+///
+/// This does **not** build the RL state vector — that's
+/// `vpn_core::state::StatePipeline::observe`, which additionally needs a
+/// rekey timer and a threat score from `core::anomaly` (Week 8). This
+/// command exists to make Week 5's real device readings visible and
+/// checkable on their own, before those other pieces exist.
+#[tauri::command]
+fn device_snapshot(state: State<AppState>) -> DeviceSnapshot {
+    let device = &state.device;
+
+    // Order matters only for wall-clock cost, not correctness: cpu_load
+    // blocks ~200ms (sysinfo's minimum sample interval) and latency blocks
+    // up to ~1s (the ping timeout) - both are read once each, not looped.
+    let cpu_load = device.cpu_load();
+    let ram_available_fraction = device.ram_available_fraction();
+    let latency_ms = device.latency().map(|d| d.as_secs_f64() * 1000.0);
+    let upload_rate_bytes_per_sec = device.upload_rate_bytes_per_sec();
+    let connection_type = format!("{:?}", device.connection_type());
+
+    DeviceSnapshot {
+        cpu_load,
+        ram_available_fraction,
+        latency_ms,
+        upload_rate_bytes_per_sec,
+        connection_type,
+    }
 }
 
 fn lock_status<'a>(state: &'a State<'a, AppState>) -> std::sync::MutexGuard<'a, ConnectionStatus> {
@@ -81,6 +135,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             status: Mutex::new(ConnectionStatus::Disconnected),
+            device: SysinfoDeviceState::new(),
         })
         .setup(|app| {
             // System tray: an icon plus a minimal Quit menu. Real status
@@ -110,7 +165,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             connect,
             disconnect,
-            connection_status
+            connection_status,
+            device_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
