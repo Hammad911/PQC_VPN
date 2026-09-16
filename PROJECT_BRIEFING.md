@@ -482,9 +482,30 @@ the real implementation rather than taken on faith:
   `test_phase2.py::test_ppo_policy_param_count_matches_proposal_spec`, so
   it can't silently drift if the architecture changes later.
 
+**Where the implementation deliberately differs from proposal v1** (kept,
+because the code's choice suits the project better; `RL_PQC_VPN_Proposal_v2.md`
+is corrected to match):
+
+- The Python daemon + FastAPI/WebSocket design became a Rust `vpn_core` crate
+  linked straight into the Tauri app, with no subprocess and no local HTTP API.
+  That makes a future mobile app a thin shell rather than a rewrite.
+- liboqs / liboqs-python / PyCA became pure-Rust `ml-kem`, `ml-dsa`,
+  `x25519-dalek`, shared by client and server. Python keeps liboqs only for
+  the Phase 1 reference code and tests.
+- "The server signs its ML-KEM public key" became: the client holds the
+  ephemeral ML-KEM keypair and the server signs the whole handshake transcript,
+  nonces included. This is strictly stronger.
+- The PQC handshake is its own TCP protocol (port 51821) with an HKDF-SHA256 key
+  schedule and HMAC finish tags (`server/PROTOCOL.md`).
+- No on-device fine-tuning and no saved experience buffer: training is offline,
+  and the device runs ONNX inference behind a decision gate.
+
 ---
 
 ## 9. Not Built Yet (be precise about this if asked)
+
+> Historical snapshot from the Phase 1–2 hand-off. Much of this list has
+> since been built. `PROGRESS.md` is the current status, per member and week.
 
 - **Anomaly detection Layers 2 and 3** — rule-based signature checks
   (CPU-gated below 70%) and Isolation Forest (CPU-gated below 40%). Only

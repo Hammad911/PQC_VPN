@@ -1,17 +1,26 @@
-# Open decisions for the Week 4 checkpoint
+# Decisions from the Week 4 checkpoint — resolved
 
 Two amendments to frozen Week 1/2 contracts, proposed and measured on
-Member 3's side, both needing Member 2's (and, for the second, the whole
-team's) sign-off before they can be treated as settled rather than a
-default that happens to be `True` in the reference implementation.
+Member 3's side, brought to the Week 4 checkpoint for Member 2's (and, for
+the second, the whole team's) sign-off.
 
-Nothing here is adopted unilaterally: both amendments ship as opt-out flags
-so `False` reproduces the frozen behavior exactly, and both are reported
-with the cost alongside the benefit rather than the benefit alone.
+| # | Decision | Resolution |
+|---|---|---|
+| 1 | `REKEY_ESCALATES` | **Approved as shipped.** Default stays `True`; the server already accepts an equal-or-stronger rekey algorithm (`server/PROTOCOL.md` §4.6, §6). |
+| 2 | ML-KEM-1024 dead band | **Option B chosen, retrain deferred** to Member 3's Week 11 tuning pass, after Member 1's Week 7 ONNX integration. Option A stays future work. |
+
+The original write-ups follow unchanged below the resolution notes, so the
+measured trade-offs behind each decision stay on record.
 
 ---
 
 ## Decision 1 — `REKEY_ESCALATES`: should a rekey be allowed to raise the algorithm in force?
+
+> **Resolution (Week 4 checkpoint): approved as shipped.** No code change:
+> `DecisionGate(rekey_escalates=True)` stays the default, and
+> `contracts/algo_registry.json`'s rekey semantics now state it. The server
+> side was already written to the approved rule (`registry.rs` rejects only a
+> downgrade). The tighter-margin variant was not requested.
 
 **What Week 2 froze:** `algo_registry.json` defines `rekey-now` as "re-run
 the handshake using the algorithm currently in force" — rotation and
@@ -53,7 +62,7 @@ measurement bug in `simulate()` that undercounted its own sample by ~97%
 against the corrected estimator; they were not silently wrong, just
 under-sampled).
 
-**The ask for Member 2:**
+**The options that were put to Member 2** (approve as shipped was chosen):
 - **Approve as shipped** — no code change, default stays `True`.
 - **Reject** — flip the default to `False`, Week 2 semantics stand exactly.
 - **Approve with a tighter margin** — the escalation path currently bypasses
@@ -66,6 +75,17 @@ under-sampled).
 ---
 
 ## Decision 2 — the ML-KEM-1024 dead band: how to fix the reward, not just mitigate it
+
+> **Resolution (Week 4 checkpoint): Option B chosen, retrain deferred.**
+> Implementing it means retraining and re-exporting the ONNX policy, and
+> Member 1 builds the `ort` wrapper against the current artifact in Week 7. So
+> the reward patch plus retrain/re-export is scheduled for **Member 3's Week 11
+> tuning pass** (`TEAM_TIMELINE_PROPOSAL.md`), after the Week 8 vertical slice is
+> working. Member 1 then swaps in the new `.onnx` + `policy_test_vectors.json` +
+> `manifest.json` together, with no interface change. Until then the shipped
+> mitigation (Decision 1) covers the practical harm, and
+> `test_phase4.py`'s 0.45 high-need floor stays as the regression guard.
+> Option A (in-force algorithm as environment state) is recorded as future work.
 
 **Root cause (PROGRESS.md, Week 3):** `action_reward`'s `rekey-now` branch
 scores purely on urgency (`0.5*threat + 0.5*time_since_rekey`) and never
@@ -105,7 +125,8 @@ interface risk. Costs honesty: it doesn't know the real in-force algorithm
 either, so it's tuned to assume the worst above the threshold rather than
 actually pricing the shortfall — a calibrated band-aid, not the fix.
 
-**Recommendation to bring to the sync:** ship Option B now, if the team
+**Recommendation that was brought to the sync** (adopted, with the retrain timed
+as in the resolution above): ship Option B now, if the team
 wants a training-side improvement, since Decision 1's escalation rule
 already recovers most of the practical harm; save Option A for a deliberate
 retrain/re-export cycle instead of one landing in the same week Member 1

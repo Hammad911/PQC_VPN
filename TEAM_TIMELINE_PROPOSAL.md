@@ -42,6 +42,12 @@ mid-project. Get them wrong and weeks 6–12 turn into rework.
    — this is the decision that determines whether mobile is a future
    option or a future rewrite.
 
+**Status (Week 4 checkpoint): all three are frozen and recorded.**
+1 → `server/PROTOCOL.md` (FROZEN v1, §8 resolved); 2 →
+`INTERFACE_FREEZE_PROPOSAL.md` (FROZEN) + `contracts/`; 3 → `core/README.md`
+(workspace with the `vpn_core` package). Both amendments raised at the
+checkpoint are resolved in `contracts/DECISIONS.md`.
+
 ---
 
 ## 3. Keeping the Mobile Option Open (without building it)
@@ -128,7 +134,7 @@ week-1/week-2 investment, not free.
                     ┌───────────────────────────────┐
                     │  Member 2's server              │
                     │  WireGuard + PQC handshake       │
-                    │  responder (liboqs, ML-DSA-65)   │
+                    │  responder (vpn_core, ML-DSA-65) │
                     │  — platform-agnostic by design   │
                     └───────────────────────────────┘
 ```
@@ -151,16 +157,16 @@ wire protocol responding correctly regardless of which client sent it.
 | Week | Work |
 |---|---|
 | 1 | Design and get sign-off on the workspace layout (Section 3). Scaffold `core/`, `desktop/` crates, empty `mobile-bindings/` `.udl` stub. |
-| 2 | Port `hybrid_kem.py` and `auth.py` to Rust (`liboqs-rust` + `x25519-dalek`). Parity tests against the existing Python test vectors from `test_phase1.py` — same inputs must produce matching shared secrets. |
+| 2 | Port `hybrid_kem.py` and `auth.py` to Rust (pure-Rust `ml-kem` / `ml-dsa` + `x25519-dalek`, chosen over `liboqs-rust` so there's no C dependency and the server shares the same crate). Parity tests against the existing Python test vectors from `test_phase1.py` — same inputs must produce matching shared secrets. |
 | 3 | Port `key_store.py` (secure wipe semantics). Define the `DeviceState` and `TunnelHandle` traits core will depend on. |
 | 4 | Basic Tauri shell: window, system tray, connect/disconnect button wired to a stub. **Checkpoint: architecture contracts frozen (Section 2) — sync with Members 2 & 3.** |
 | 5 | Implement `desktop/`'s `DeviceState` using the `sysinfo` crate (CPU/RAM/network — the Rust equivalent of `state_observer.py`). |
 | 6 | Integrate `protocol/` client side against Member 2's server (may still be a stub/mock server at this point — coordinate). First real handshake over the network, Rust client ↔ Rust-or-mock server. |
-| 7 | Integrate Member 3's exported ONNX policy via the `ort` crate. Wire `rl/` output into `crypto/`'s algorithm selection. |
-| 8 | Integrate Member 3's anomaly `threat_score` combiner into the state pipeline. **Checkpoint: first full vertical slice — real desktop app, real agent decision, real handshake, against Member 2's real (not mock) server.** |
+| 7 | Integrate Member 3's exported ONNX policy via the `ort` crate (action count read from the model's output shape). Wire Member 3's Rust decision-gate port into `core::rl`, then `rl/` output into `crypto/`'s algorithm selection. |
+| 8 | Integrate Member 3's Rust anomaly port (Layers 1–2 + combiner, Layer 3 as it lands) into `core::anomaly` and the state pipeline. Implement the desktop side of the Layer 2 live-input trait (distinct destination ports, retransmit rate, DNS server — defined in `core`, platform-read in `desktop/`). **Checkpoint: first full vertical slice — real desktop app, real agent decision, real handshake, against Member 2's real (not mock) server.** |
 | 9 | WireGuard PSK injection (`wg set` wrapped from Rust) — tunnel actually comes up end to end. |
-| 10 | React dashboard: live connection status, chosen algorithm, threat layers active, rekey countdown — reading directly from `core/` in-process (no WebSocket needed on desktop, unlike the original FastAPI-based proposal design — simpler now that there's no subprocess boundary). |
-| 11 | Packaging (`.deb`, AppImage via `cargo tauri build`), bug-fixing from integration testing with both other members. |
+| 10 | React dashboard: live connection status, chosen algorithm, threat layers active, rekey countdown — reading directly from `core/` in-process through Tauri commands/events. |
+| 11 | Packaging (`.deb`, AppImage via `cargo tauri build`), bug-fixing from integration testing with both other members. Swap in Member 3's re-exported policy (Decision 2 retrain): `.onnx` + `policy_test_vectors.json` + `manifest.json` together, re-run the parity vectors. |
 | 12 | Final polish, mobile-readiness review (confirm `core/` has zero platform leakage — this is the checkpoint that actually validates Section 3's promise), demo prep. |
 
 ### Member 2 — WireGuard + PQC Server (Desktop-Serving, Mobile-Ready)
@@ -168,7 +174,7 @@ wire protocol responding correctly regardless of which client sent it.
 | Week | Work |
 |---|---|
 | 1 | Provision the VPS (DigitalOcean/AWS Lightsail, Ubuntu). Install WireGuard. Draft the wire protocol proposal for Week 1's sync (Section 2). |
-| 2 | **Checkpoint: protocol frozen.** Implement the server-side PQC handshake responder (liboqs) matching Member 1's client-side implementation — same algorithm set, same ML-DSA-65 server identity/signing logic. |
+| 2 | **Checkpoint: protocol frozen.** Implement the server-side PQC handshake responder (on `vpn_core::crypto`) matching Member 1's client-side implementation — same algorithm set, same ML-DSA-65 server identity/signing logic. |
 | 3 | Server-side `wg set` PSK injection for a single test peer — get one manual end-to-end handshake working against a throwaway client script (doesn't need to wait on Member 1's Tauri app). |
 | 4 | Containerize the handshake responder (Docker). **Checkpoint: sync on protocol stability with Member 1.** |
 | 5 | Multi-peer session management — the server needs to track which WireGuard peer maps to which active PQC session, since production use means more than one client. |
@@ -190,11 +196,11 @@ wire protocol responding correctly regardless of which client sent it.
 | 4 | Export the trained policy to ONNX. Verify numerically that ONNX inference matches PyTorch inference on a batch of test states (this parity check matters — a silent export bug would be invisible until it showed up as weird behavior on-device). **Checkpoint: sync interface with Member 1.** |
 | 5 | Build anomaly detection Layer 2 (rule-based signatures): port scan detection, retransmission-spike detection, MitM-latency-signature detection, bandwidth-spike/exfiltration detection, DNS-server-change detection. Each as an independent stateful check over the rolling 5-second metric window. |
 | 6 | Wire Layer 2 into the CPU-gated combiner (`< 70%` CPU) alongside the existing always-on Layer 1. Unit tests per signature (inject a synthetic port-scan pattern, confirm it fires; inject normal traffic, confirm it doesn't). |
-| 7 | Build anomaly detection Layer 3 (Isolation Forest): define the feature vector (packet size distribution, rate, inter-arrival time, directionality), collect/simulate benign-traffic training data, train `sklearn.IsolationForest`. |
-| 8 | Export the Isolation Forest for Rust consumption (via `skl2onnx`, or a from-scratch Rust port — Isolation Forest inference is just decision-tree traversal, cheap to reimplement if the ONNX export path proves awkward). Wire into the combiner with the `< 40%` CPU gate. **Checkpoint: first full vertical slice** — all three anomaly layers plus the RL agent feeding real decisions into Member 1's client. |
+| 7 | Build anomaly detection Layer 3 (Isolation Forest): define the feature vector (packet size distribution, rate, inter-arrival time, directionality), collect/simulate benign-traffic training data, train `sklearn.IsolationForest`. Also: Rust reference port of the decision gate for Member 1's Week 7, verified against `contracts/decision_gate_vectors.json`. |
+| 8 | Export the Isolation Forest for Rust consumption (via `skl2onnx`, or a from-scratch Rust port — Isolation Forest inference is just decision-tree traversal, cheap to reimplement if the ONNX export path proves awkward). Wire into the combiner with the `< 40%` CPU gate. Rust reference port of Layers 1–2 + the combiner for `core::anomaly`, verified against new Python-generated `contracts/anomaly_vectors.json` (same pattern as the decision-gate vectors). **Checkpoint: first full vertical slice** — all three anomaly layers plus the RL agent feeding real decisions into Member 1's client. |
 | 9 | Design and run the baseline evaluation the proposal itself calls for: trained agent vs. classical WireGuard (no PQC), vs. static ML-KEM-768, vs. a simple rule-based policy — across at least three defined scenarios (idle, elevated threat, resource-constrained). |
 | 10 | Collect evaluation metrics: connection latency overhead, CPU usage, and effective security level per baseline. Write up results. |
-| 11 | Tuning pass based on evaluation findings; support integration bug-fixing with Members 1 & 2. |
+| 11 | Tuning pass based on evaluation findings, including the deferred Decision 2 fix (`contracts/DECISIONS.md`): Option B reward patch, retrain, re-export ONNX + regenerate contracts, raise the `test_phase4.py` high-need floor to the new measured value. Hand the artifact set to Member 1. Support integration bug-fixing with Members 1 & 2. |
 | 12 | Final evaluation report, demo prep — be ready to explain the full reward-design story (Section 6 of `PROJECT_BRIEFING.md`) since it's the most substantive technical narrative in this whole track. |
 
 ---
@@ -210,6 +216,8 @@ together, not just work in parallel:
 - **End of Week 4:** everyone re-confirms the contracts held up under
   actual implementation (it's normal for something to need a small
   amendment here — better to catch it now than at Week 10).
+  *Done:* both amendments resolved (`contracts/DECISIONS.md`), protocol
+  frozen, server moved onto the shared `vpn_core` transcript/KDF/identity.
 - **End of Week 6/8:** first full vertical slice — a real (if unpolished)
   desktop app, connecting to the real server, using the real trained
   agent and real anomaly layers. This is the point to demo internally
@@ -229,6 +237,9 @@ together, not just work in parallel:
 | `core/` accumulates platform-specific shortcuts under deadline pressure, quietly breaking the mobile-readiness promise | Explicit Week 12 review checking for trait-boundary violations, not just "does it compile" |
 | RL agent's narrow decision margins (Section 5, Member 3 Weeks 1–3) aren't fully fixed by Week 4 | Ship with the current smoke-tested model if needed and keep improving in parallel — Member 1 doesn't need the *final* model, just a stable ONNX interface, which can be re-exported later without touching client code |
 | Server hardening (rate limiting, replay protection) gets deprioritized under integration pressure | Scheduled explicitly in Weeks 7 and not shared with a feature-integration week, so it doesn't silently get cut |
+| The anomaly layers and decision gate exist only in Python, and nobody was named to port them to Rust | Owned explicitly since the Week 4 checkpoint: Member 3 writes the Rust reference ports against Python-generated vectors (Weeks 7–8), Member 1 wires them into `core` |
+| Layer 2 needs live inputs (ports, retransmits, DNS) that are platform-specific and had no owner | A platform trait in `core` (no platform APIs in core), implemented in `desktop/` by Member 1 in Week 8 |
+| Retraining for Decision 2 changes the ONNX artifact during integration | Deferred to Week 11; the swap is artifact-only (no interface change) and verified by the parity vectors |
 
 ---
 

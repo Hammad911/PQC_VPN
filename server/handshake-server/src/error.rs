@@ -48,7 +48,8 @@ pub enum HandshakeError {
     AlgoRejected,
     /// Rekey referenced a `session_id` the server has no record of.
     UnknownSession,
-    /// Rekey `algo` is weaker than in force, or stronger without `REKEY_ESCALATES`.
+    /// Rekey `algo` is weaker than in force (a stronger one is allowed —
+    /// `REKEY_ESCALATES`, approved at the Week 4 checkpoint).
     AlgoMismatch,
     /// The client's confirmation tag did not verify.
     AuthFailed,

@@ -1,7 +1,9 @@
-# RL State/Action Interface — Freeze Proposal (Member 3)
+# RL State/Action Interface — FROZEN (Member 3)
 
-Proposed for sign-off at the end-of-Week-1 sync (`TEAM_TIMELINE_PROPOSAL.md`,
-Section 2, item 2). This interface already exists in code and has been
+**Status: FROZEN.** Proposed at the end-of-Week-1 sync (`TEAM_TIMELINE_PROPOSAL.md`,
+Section 2, item 2) and re-confirmed by the team at the Week 4 checkpoint,
+including the two amendments in `contracts/DECISIONS.md`. The filename keeps
+"proposal" because it is referenced throughout the repo. This interface already exists in code and has been
 stable since Phase 2 was built — nothing here is a redesign. The purpose
 of this document is to make it an explicit, reviewable contract so
 Member 1 can build the Rust-side ONNX consumer (`core/rl/`, Week 7)
@@ -31,7 +33,7 @@ vector in this exact order at inference time.
 | 3 | `UPLOAD` | 0=idle, 1=saturated | Upload throughput, normalized against a 5MB/s cap | `StateObserver` (`psutil.net_io_counters` delta) |
 | 4 | `CONN_TYPE` | 0=wired, 0.5=wifi/unknown, 1=cellular | Best-effort classification from interface names | `StateObserver` |
 | 5 | `TIME_SINCE_REKEY` | 0=just rekeyed, 1=≥1hr | Wall-clock since last key rotation, normalized against a 1hr cap | `StateObserver` (resets via `mark_rekey()`) |
-| 6 | `THREAT` | 0=none, 1=confirmed anomaly | Combined anomaly score | **Not** `StateObserver` — passed in from the anomaly detection pipeline (`anomaly_detector.py`, Layer 1 today; Layers 2/3 land Weeks 5–8 and feed the same slot) |
+| 6 | `THREAT` | 0=none, 1=confirmed anomaly | Combined anomaly score | **Not** `StateObserver` — passed in from the anomaly detection pipeline (`anomaly_detector.py::AnomalyCombiner` — Layers 1+2 combined under the CPU gate since Week 6; Layer 3 lands Weeks 7–8 and feeds the same slot) |
 
 **Invariants Member 1 can rely on:**
 - Index order will not change.
@@ -82,8 +84,14 @@ ML-KEM-768 on rekey while the registry lists the action with
 for an *existing* peer and swap its PSK) cannot be implemented against
 an undefined answer.
 
-**Resolved: a rekey re-runs the handshake using the algorithm currently
+**Resolved (Week 2): a rekey re-runs the handshake using the algorithm currently
 in force.** It rotates key material without changing strength.
+
+> **Amended at the Week 4 checkpoint (`REKEY_ESCALATES`, approved):** a rekey
+> runs at the **stronger** of {algorithm in force, the policy's top-ranked KEM},
+> never weaker. See Section 5. The rationale below still explains why rotation
+> alone is not an escalation trigger; the amendment only lets a handshake that
+> is happening anyway pick the stronger algorithm.
 
 Rationale: "when to rotate" and "how strong" stay independent decisions.
 The proposal's stated justification for rekeying is stale session keys
@@ -102,14 +110,12 @@ Consequences for consumers:
   this action `"kind": "rekey"` with `"liboqs_id": null` so it cannot be
   mistaken for a KEM identifier.
 
-**Discussion point for the freeze meeting (not a unilateral decision):**
-if HQC-256 is enabled later, the action count silently becomes 5. The
-proposal is that Member 1's Rust consumer read the action count from the
-exported ONNX model's output shape (available from Week 4 onward)
-instead of hardcoding `4`, so enabling HQC-256 in the registry later
-does not require a corresponding Rust code change — only a re-export and
-a re-deploy of the model artifact. Needs explicit agreement at the sync,
-since it affects how Member 1 writes the `core/rl/` inference wrapper.
+**Resolved at the freeze:** if HQC-256 is enabled later, the action count
+becomes 5. Member 1's Rust consumer reads the action count from the exported
+ONNX model's output shape instead of hardcoding `4`, so enabling HQC-256 in the
+registry later needs only a re-export and re-deploy of the model artifact, not
+a Rust code change. This is how the `core/rl/` inference wrapper (Week 7) is
+written.
 
 ---
 
@@ -194,7 +200,9 @@ its constants are the contract; that they were derived from a measurement does
 not make them negotiable per-client, or the desktop and mobile ports would
 debounce differently.
 
-### Open item for the Week 4 checkpoint
+### Rekey escalation — resolved at the Week 4 checkpoint
+
+**Approved as shipped** (`contracts/DECISIONS.md` Decision 1). What was raised:
 
 Section 2.1 pinned a rekey as "re-run the handshake at the algorithm currently
 in force". Week 3 found that under this rule, high-security-need sessions
@@ -210,7 +218,8 @@ performing anyway is free; downgrading on one noisy tick is not, which is why
 it is a `max` and downgrades still go through the confirm-ticks path.
 
 It is implemented behind `rekey_escalates` (default on; `False` gives exactly
-the Week 2 semantics) and **needs Member 2's sign-off**, since it means a rekey
-can arrive at a different algorithm than the one in force. Raised here rather
-than changed unilaterally — see `PROGRESS.md` Week 3 for the underlying
-reward-model defect that produces the behaviour.
+the Week 2 semantics). Member 2 signed off at the Week 4 checkpoint, and the
+server accepts an equal-or-stronger `RekeyRequest.algo` (`server/PROTOCOL.md`
+§4.6). The underlying reward-model defect (`PROGRESS.md` Week 3) is Decision 2:
+Option B, with the retrain deferred to Week 11 so the ONNX artifact stays
+stable through Member 1's Week 7 integration.

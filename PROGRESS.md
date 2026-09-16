@@ -1298,12 +1298,53 @@ Multi-peer registry with persistence, capacity, and startup reconciliation,
 verified live with three concurrent peers and a restart. `core/` and
 `contracts/` untouched.
 
+## Weeks 1–5 (Member 1 track, through 2026-09-14) — Rust core and Tauri shell
+
+Recorded here so every member's track is in one document; the detail lives in
+the commit messages and `core/README.md`.
+
+| Week | Delivered |
+|---|---|
+| 1 | Cargo workspace per the plan's Section 3: `core/`, `desktop/` (Tauri + React), `mobile-bindings/pqc_vpn.udl` stub. |
+| 2 | `core::crypto`: hybrid X25519 + ML-KEM-512/768/1024, ML-DSA-65 `ServerAuthenticator`, signed handshake transcript, zeroizing `SecureKeyStore` (the `key_store.py` port landed here, a week early). Pure-Rust `ml-kem` / `ml-dsa` / `x25519-dalek` rather than `liboqs-rust`, so there is no C dependency and the server shares the crate. |
+| 3 | `core::state`: `DeviceState` and `TunnelHandle` traits, `StatePipeline` producing the frozen 7-dim vector with the contract's normalization caps, and `mock` test doubles. `combine_shared_secrets` pinned against CPython-computed digests. |
+| 4 | Tauri shell: window, tray, and `connect` / `disconnect` / `connection_status` wired to a stub. Checkpoint items for `PROTOCOL.md` §8: nonces in the transcript (Q1), shared `derive_session_keys` (Q2), `ServerAuthenticator` seed persistence (Q7). Package renamed `core` → `vpn_core`. |
+| 5 | `desktop/src-tauri/src/device_state.rs`: real `DeviceState` via `sysinfo` (CPU, RAM, ping latency, upload rate, link type), exposed as the `device_snapshot` command with a Device panel in the UI. |
+
+Tests at Week 5: `vpn_core` 34, `desktop` 6.
+
+## Week 4 checkpoint closed (2026-09-15) — contracts frozen, server on shared crypto
+
+The end-of-Week-4 sync (`TEAM_TIMELINE_PROPOSAL.md` §6) is recorded:
+
+- **Frozen:** `server/PROTOCOL.md` (DRAFT → FROZEN v1, all §8 questions resolved),
+  `INTERFACE_FREEZE_PROPOSAL.md` (FROZEN), and the workspace layout.
+- **`contracts/DECISIONS.md`:** Decision 1 `REKEY_ESCALATES` approved as shipped.
+  Decision 2 is Option B, with the retrain deferred to Member 3's Week 11 so the
+  ONNX artifact stays stable through Member 1's Week 7 `ort` integration.
+  `algo_registry.json`'s rekey semantics regenerated to state the approved rule.
+- **Server now uses `vpn_core`** for the transcript (new
+  `build_handshake_transcript_from_bytes`, which the typed builder also calls),
+  the HKDF key schedule, and the ML-DSA-65 identity. `ml-dsa` and `hkdf` are
+  dropped from the server's dependencies. `server/handshake-vectors.json`
+  regenerates byte-identical apart from the protocol status string, and
+  existing identity seeds load the same key, so the droplet's pinned key is
+  unchanged.
+- **Plan gaps closed** in `TEAM_TIMELINE_PROPOSAL.md`: named owners for the Rust
+  ports of the decision gate and anomaly layers (Member 3 writes them against
+  Python vectors, Member 1 wires them in), a `core` trait for the Layer 2 live
+  inputs, and the Week 11 retrain and artifact swap.
+- **Proposal v2** (`RL_PQC_VPN_Proposal_v2.md` / `.pdf`) matches the design as
+  built. v1 is kept for history.
+
 ## How to reproduce
 
 ```bash
 source venv/bin/activate
 pip install -r requirements.txt   # liboqs-python must be built separately
-pytest tests/ -v                  # 87/87
+pytest tests/ -v                  # 94/94
+cargo test --workspace            # vpn_core, handshake-server, desktop
+cargo run -p handshake-server --bin emit-vectors   # regenerate server/handshake-vectors.json
 
 python demo.py                            # end-to-end walkthrough
 python -m client.rl_agent.evaluate        # return vs baselines and the oracle

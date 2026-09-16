@@ -3,18 +3,20 @@
 Server-side PQC handshake responder — reference implementation of
 [`../PROTOCOL.md`](../PROTOCOL.md) v1. Member 2, Week 2.
 
-All cryptography is `vpn_core::crypto` (Member 1's Rust port). This crate is
-only the wire protocol around it: framing, the signed transcript, the key
-schedule, the server identity, and a blocking TCP server.
+All cryptography is `vpn_core::crypto` (Member 1's Rust port) — including the
+signed transcript layout, the HKDF key schedule, and the ML-DSA-65 identity key
+(`PROTOCOL.md` §8 Q1/Q2/Q7, resolved at the Week 4 checkpoint). This crate is
+only the wire protocol around it: framing, the finish MACs, identity-file
+persistence, peer/tunnel management, and a blocking TCP server.
 
 ## Layout
 
 | module | role |
 |---|---|
 | `wire` | frame + message encode/decode (`PROTOCOL.md` §3–4) |
-| `transcript` | the byte string the server signs (§5.1) |
-| `kdf` | `hybrid_secret` → `{psk, confirm_key}` + the finish MACs (§5.3) |
-| `identity` | long-term ML-DSA-65 key, persisted as its 32-byte seed (§5.2) |
+| `transcript` | the byte string the server signs (§5.1) — wire-bytes adapter over `vpn_core` |
+| `kdf` | `hybrid_secret` → `{psk, confirm_key}` via `vpn_core::crypto::derive_session_keys`, plus the finish MACs (§5.3) |
+| `identity` | long-term ML-DSA-65 key (`vpn_core::crypto::ServerAuthenticator`), persisted as its 32-byte seed (§5.2) |
 | `handshake` | server: `ClientHello` → `ServerHello` |
 | `client_handshake` | client side, for `test-client` and `emit-vectors` |
 | `tunnel` | `PskInstaller` — `WgCli` runs `wg set` / `wg show … peers` / `… remove`; `DryRun` logs |
@@ -47,7 +49,7 @@ identity file as `<identity>.pub` (hex). That hex is what a client pins.
 ## Tests
 
 ```bash
-cargo test -p handshake-server        # 17 unit + 4 integration
+cargo test -p handshake-server        # 22 unit + 4 integration
 ```
 
 `tests/handshake.rs` includes `over_tcp_full_handshake_returns_tunnel_params` —
@@ -61,7 +63,8 @@ the same PSK, plus a dry-run PSK install and the returned tunnel params.
   their clients re-handshake. (Writing `wg0.conf` for true persistence is
   possible later; the registry + reconciliation covers the container case.)
 - **No `RekeyRequest` CLI.** The server-side rekey path (`PROTOCOL.md` §6,
-  including the `REKEY_ESCALATES` no-downgrade rule and the
+  including the approved `REKEY_ESCALATES` rule — equal or stronger, never
+  weaker — and the
   `(wg_pubkey, session_id)` lookup) is implemented and unit-tested; a
   `--rekey` flag on `test-client` lands Week 6.
 - **Replay cache / rate limiting** — fields are in the protocol; enforcement is

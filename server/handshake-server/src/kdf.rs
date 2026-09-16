@@ -10,17 +10,15 @@
 //! server_tag = HMAC-SHA256(confirm_key, "server finished" ‖ transcript)
 //! ```
 //!
-//! Lives in this crate until the freeze meeting decides whether it belongs in
-//! `core` (`PROTOCOL.md` §8, Q2).
+//! The HKDF half is `vpn_core::crypto::derive_session_keys`, shared with the
+//! client (`PROTOCOL.md` §8 Q2, resolved). The finish MACs stay here until
+//! `core::protocol` (Week 6) needs them on the client side too.
 
-use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-const INFO_PSK: &[u8] = b"pqc-vpn wg psk";
-const INFO_CONFIRM: &[u8] = b"pqc-vpn confirm";
 const LABEL_CLIENT_FINISHED: &[u8] = b"client finished";
 const LABEL_SERVER_FINISHED: &[u8] = b"server finished";
 
@@ -37,16 +35,11 @@ pub fn derive(
     client_nonce: &[u8; 32],
     server_nonce: &[u8; 32],
 ) -> SessionKeys {
-    let mut salt = [0u8; 64];
-    salt[..32].copy_from_slice(client_nonce);
-    salt[32..].copy_from_slice(server_nonce);
-
-    let hk = Hkdf::<Sha256>::new(Some(&salt), hybrid_secret);
-    let mut psk = [0u8; 32];
-    let mut confirm_key = [0u8; 32];
-    hk.expand(INFO_PSK, &mut psk).expect("32 <= 255*32");
-    hk.expand(INFO_CONFIRM, &mut confirm_key).expect("32 <= 255*32");
-    SessionKeys { psk, confirm_key }
+    let keys = vpn_core::crypto::derive_session_keys(hybrid_secret, client_nonce, server_nonce);
+    SessionKeys {
+        psk: *keys.psk,
+        confirm_key: *keys.confirm_key,
+    }
 }
 
 fn tag(confirm_key: &[u8; 32], label: &[u8], transcript: &[u8]) -> [u8; 32] {

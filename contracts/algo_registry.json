@@ -47,7 +47,7 @@
       "cpu_cost": 3.0,
       "kind": "rekey",
       "liboqs_id": null,
-      "semantics": "re-run the handshake using the algorithm currently in force"
+      "semantics": "re-run the handshake at the algorithm in force, or at the policy's top-ranked KEM if that is stronger; never weaker"
     }
   ],
   "inactive": [

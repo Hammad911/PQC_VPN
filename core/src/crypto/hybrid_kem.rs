@@ -231,11 +231,44 @@ pub fn build_handshake_transcript<K: KemCore>(
     server_x25519_public: &PublicKey,
     ciphertext: &::ml_kem::Ciphertext<K>,
 ) -> Vec<u8> {
-    const PROTOCOL_LABEL: &[u8] = b"PQC-VPN-HANDSHAKE-v1";
-
     let client_mlkem_public = client_keys.mlkem_public.as_bytes();
 
-    let mut transcript = Vec::new();
+    build_handshake_transcript_from_bytes(
+        algorithm_name,
+        client_nonce,
+        server_nonce,
+        client_keys.x25519_public.as_bytes(),
+        client_mlkem_public.as_ref(),
+        server_x25519_public.as_bytes(),
+        ciphertext.as_ref(),
+    )
+}
+
+/// Builds the same transcript as [`build_handshake_transcript`] from raw
+/// wire bytes.
+///
+/// The server only ever sees the client's *public* values as bytes on the
+/// wire, never a `HybridClientKeys` (which holds the client's secrets), so it
+/// cannot call the typed function. Both paths go through this one function,
+/// so the client and `server/handshake-server` sign and verify identical bytes.
+pub fn build_handshake_transcript_from_bytes(
+    algorithm_name: &[u8],
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
+    client_x25519_public: &[u8; 32],
+    client_mlkem_public: &[u8],
+    server_x25519_public: &[u8; 32],
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    const PROTOCOL_LABEL: &[u8] = b"PQC-VPN-HANDSHAKE-v1";
+
+    let mut transcript = Vec::with_capacity(
+        PROTOCOL_LABEL.len()
+            + algorithm_name.len()
+            + 32 * 4
+            + client_mlkem_public.len()
+            + ciphertext.len(),
+    );
 
     transcript.extend_from_slice(PROTOCOL_LABEL);
     transcript.extend_from_slice(algorithm_name);
@@ -243,13 +276,13 @@ pub fn build_handshake_transcript<K: KemCore>(
     transcript.extend_from_slice(client_nonce);
     transcript.extend_from_slice(server_nonce);
 
-    transcript.extend_from_slice(client_keys.x25519_public.as_bytes());
+    transcript.extend_from_slice(client_x25519_public);
 
-    transcript.extend_from_slice(client_mlkem_public.as_ref());
+    transcript.extend_from_slice(client_mlkem_public);
 
-    transcript.extend_from_slice(server_x25519_public.as_bytes());
+    transcript.extend_from_slice(server_x25519_public);
 
-    transcript.extend_from_slice(ciphertext.as_ref());
+    transcript.extend_from_slice(ciphertext);
 
     transcript
 }
