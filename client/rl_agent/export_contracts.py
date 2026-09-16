@@ -50,11 +50,14 @@ CONTRACTS_DIR = REPO_ROOT / "contracts"
 GENERATOR = "python -m client.rl_agent.export_contracts"
 
 # Decided at the Week 1 sync and recorded here because Member 2's Week 6 task
-# (accept a fresh handshake for an existing peer) needs it pinned: a rekey
-# rotates key material without changing strength. "When to rotate" and "how
-# strong" stay independent decisions, matching the proposal's stated reason to
-# rekey — stale session keys sitting in RAM, not a threat escalation.
-REKEY_SEMANTICS = "re-run the handshake using the algorithm currently in force"
+# (accept a fresh handshake for an existing peer) needs it pinned. Week 2 pinned
+# "a rekey rotates key material without changing strength"; the Week 4
+# checkpoint approved the REKEY_ESCALATES amendment (contracts/DECISIONS.md
+# Decision 1): a handshake that is happening anyway may pick the policy's
+# top-ranked KEM if it is stronger, never a weaker one. Rotation alone is still
+# not a threat escalation — stale session keys in RAM remain the reason to rekey.
+REKEY_SEMANTICS = ("re-run the handshake at the algorithm in force, or at the "
+                   "policy's top-ranked KEM if that is stronger; never weaker")
 
 
 def build_algo_registry() -> dict:

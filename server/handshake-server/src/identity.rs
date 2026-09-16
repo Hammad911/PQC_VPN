@@ -4,48 +4,31 @@
 //! public half is pinned in every client, so regenerating it would lock all
 //! clients out.
 //!
-//! `core::crypto::auth::ServerAuthenticator` wraps the same key type but exposes
-//! no load/save. Using `ml-dsa` directly here; `PROTOCOL.md` §8 asks Member 1 to
-//! add persistence to `ServerAuthenticator` after the freeze, at which point
-//! this module becomes a thin wrapper.
+//! The key itself is `vpn_core::crypto::ServerAuthenticator` (seed persistence
+//! added to `core` for `PROTOCOL.md` §8 Q7, resolved). This module only adds
+//! the file I/O, which is server-side platform code and stays out of `core`.
 
 use std::fs;
 use std::io;
 use std::path::Path;
 
-use ml_dsa::{
-    B32, Generate, Keypair, MlDsa65, Signature, Signer, SigningKey, Verifier, VerifyingKey,
-};
+use vpn_core::crypto::auth::SEED_LEN;
+use vpn_core::crypto::{ServerAuthenticator, ServerSignature, ServerVerifyingKey};
 
-pub const SEED_LEN: usize = 32;
 pub const VERIFYING_KEY_LEN: usize = 1952; // ML-DSA-65, FIPS 204
 pub const SIGNATURE_LEN: usize = 3309;
 
 /// Owns the server's long-term signing key.
 pub struct ServerIdentity {
-    signing_key: SigningKey<MlDsa65>,
+    auth: ServerAuthenticator,
 }
 
 impl ServerIdentity {
     /// Fresh random identity (not persisted).
     pub fn generate() -> Self {
         ServerIdentity {
-            signing_key: SigningKey::<MlDsa65>::generate(),
+            auth: ServerAuthenticator::generate(),
         }
-    }
-
-    fn from_seed_bytes(seed: &[u8; SEED_LEN]) -> Self {
-        let seed = B32::from(*seed);
-        ServerIdentity {
-            signing_key: SigningKey::<MlDsa65>::from_seed(&seed),
-        }
-    }
-
-    fn seed_bytes(&self) -> [u8; SEED_LEN] {
-        let seed = self.signing_key.to_seed();
-        let mut out = [0u8; SEED_LEN];
-        out.copy_from_slice(&seed);
-        out
     }
 
     /// Load the identity seed from `path`; if absent, generate a new one and
@@ -56,7 +39,9 @@ impl ServerIdentity {
                 let seed: [u8; SEED_LEN] = bytes.as_slice().try_into().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "identity seed must be 32 bytes")
                 })?;
-                Ok(Self::from_seed_bytes(&seed))
+                Ok(ServerIdentity {
+                    auth: ServerAuthenticator::from_seed_bytes(&seed),
+                })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let id = Self::generate();
@@ -73,7 +58,7 @@ impl ServerIdentity {
                 fs::create_dir_all(dir)?;
             }
         }
-        fs::write(path, self.seed_bytes())?;
+        fs::write(path, *self.auth.to_seed_bytes())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -82,8 +67,8 @@ impl ServerIdentity {
         Ok(())
     }
 
-    pub fn verifying_key(&self) -> VerifyingKey<MlDsa65> {
-        self.signing_key.verifying_key()
+    pub fn verifying_key(&self) -> &ServerVerifyingKey {
+        self.auth.verifying_key()
     }
 
     /// The bytes a client pins (1952 B for ML-DSA-65).
@@ -93,8 +78,7 @@ impl ServerIdentity {
 
     /// Sign `message`, returning the 3309-byte ML-DSA-65 signature.
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
-        let sig: Signature<MlDsa65> = self.signing_key.sign(message);
-        sig.encode().to_vec()
+        self.auth.sign(message).encode().to_vec()
     }
 }
 
@@ -104,14 +88,14 @@ pub fn verify(verifying_key_bytes: &[u8], message: &[u8], signature_bytes: &[u8]
     let Ok(vk_arr) = <[u8; VERIFYING_KEY_LEN]>::try_from(verifying_key_bytes) else {
         return false;
     };
-    let vk = VerifyingKey::<MlDsa65>::decode(&vk_arr.into());
+    let vk = ServerVerifyingKey::decode(&vk_arr.into());
     let Ok(sig_arr) = <[u8; SIGNATURE_LEN]>::try_from(signature_bytes) else {
         return false;
     };
-    let Some(sig) = Signature::<MlDsa65>::decode(&sig_arr.into()) else {
+    let Some(sig) = ServerSignature::decode(&sig_arr.into()) else {
         return false;
     };
-    vk.verify(message, &sig).is_ok()
+    ServerAuthenticator::verify(&vk, message, &sig)
 }
 
 #[cfg(test)]

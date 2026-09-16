@@ -163,7 +163,7 @@ impl Registry {
         if algo < p.algo {
             return Err(RegistryError::Downgrade);
         }
-        p.algo = algo; // may escalate (REKEY_ESCALATES)
+        p.algo = algo; // may escalate (REKEY_ESCALATES, approved Week 4)
         p.rekeys += 1;
         p.last_activity = SystemTime::now();
         Ok(PeerSlot {

@@ -70,7 +70,9 @@ Current weights are from the Week 2 run `F_ep4_full_s1` (300k timesteps),
 which agrees with the analytically optimal action on 99.3% of states and
 selects all four actions. Week 3's verification qualifies that headline: the
 agreement is ~51% on the small band where `security_need >= 0.90`, which is a
-known open defect with a diagnosed cause, not a mystery. `PROGRESS.md` documents what has and has not
+known defect with a diagnosed cause, not a mystery. Its fix is decided
+(`DECISIONS.md` Decision 2: Option B) and scheduled as a Week 11 retrain and
+re-export, deliberately after Member 1's Week 7 integration. `PROGRESS.md` documents what has and has not
 been established about it — in particular, "optimal" there means optimal
 with respect to a hand-designed reward in a simulator, not a measured
 security outcome.

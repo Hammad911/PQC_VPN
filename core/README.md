@@ -20,15 +20,17 @@ the latter).
 
 | Module | Contents | Status |
 |---|---|---|
-| `crypto/` | Hybrid X25519 + ML-KEM (512/768/1024), ML-DSA-65 server auth (now with seed persistence), the zeroizing key store, the nonce-bound signed handshake transcript, the shared `derive_session_keys` HKDF helper | **done** (plan Weeks 2–3, Week 4 checkpoint) |
-| `state/` | `DeviceState` + `TunnelHandle` traits, `StatePipeline` (builds the frozen 7-dim RL state vector), `NormalizationCaps`, mock implementations | **traits done** (plan Week 3) |
+| `crypto/` | Hybrid X25519 + ML-KEM (512/768/1024), ML-DSA-65 server auth (now with seed persistence), the zeroizing key store, the nonce-bound signed handshake transcript (typed, plus `build_handshake_transcript_from_bytes` for wire bytes), the shared `derive_session_keys` HKDF helper — all used by `server/handshake-server` too | **done** (plan Weeks 2–3, Week 4 checkpoint) |
+| `state/` | `DeviceState` + `TunnelHandle` traits, `StatePipeline` (builds the frozen 7-dim RL state vector), `NormalizationCaps`, mock implementations | **traits done** (plan Week 3); desktop `DeviceState` via `sysinfo` done (Week 5) |
 | `protocol/` | Client side of the handshake wire protocol (`server/PROTOCOL.md`) | stub — plan Week 6 |
 | `rl/` | ONNX inference over the trained policy + the decision gate (`contracts/`) | stub — plan Week 7 |
 | `anomaly/` | Layers 1–3 + the CPU-gated combiner (`client/rl_agent/anomaly_detector.py`) | stub — plan Week 8 |
 
 `desktop/` (Tauri shell) — window, system tray, and a `connect` / `disconnect`
-/ `connection_status` command trio wired to an in-memory stub. **Does not
-depend on `core` yet** — that starts in Week 5 (`DeviceState` via `sysinfo`).
+/ `connection_status` command trio wired to an in-memory stub (Week 4). Since
+Week 5 it depends on `vpn_core` and implements `DeviceState` with `sysinfo`
+(`desktop/src-tauri/src/device_state.rs`, exposed as the `device_snapshot`
+command).
 
 ## The trait boundary (`state/`)
 
@@ -76,31 +78,33 @@ done (`core/src/crypto/{hybrid_kem,auth,kdf}.rs`):
 
 - **Q1 — nonces in the transcript.** `build_handshake_transcript` now takes
   `client_nonce`/`server_nonce` and places them right after the algorithm
-  name, byte-for-byte matching `server/handshake-server/src/transcript.rs`.
+  name. The layout lives in one function,
+  `build_handshake_transcript_from_bytes`, which the typed builder and
+  `server/handshake-server/src/transcript.rs` both call.
 - **Q2 — HKDF location.** `crypto::derive_session_keys(hybrid_secret,
-  client_nonce, server_nonce) -> SessionKeys { psk, confirm_key }`, matching
-  `server/handshake-server/src/kdf.rs::derive`'s constants exactly. Adopting
-  it on the server side (replacing that module) is Member 2's call, not made
-  unilaterally here.
+  client_nonce, server_nonce) -> SessionKeys { psk, confirm_key }`. The server's
+  `kdf::derive` now delegates to it (`server/handshake-vectors.json`
+  byte-identical after the switch).
 - **Q7 — identity persistence.** `ServerAuthenticator::{to_seed_bytes,
-  from_seed_bytes}` added, so `server/handshake-server`'s `identity` module
-  can drop its direct `ml-dsa` use if Member 2 chooses to.
+  from_seed_bytes}` added; `server/handshake-server`'s `identity` module now
+  wraps `ServerAuthenticator` and no longer depends on `ml-dsa` directly.
 - **The `core` → `vpn_core` package rename**, closing the
   shadows-Rust's-built-in-`core` footgun. `server/handshake-server` and
   `server/crypto-spike` no longer need the `package = "core"` alias in their
   `Cargo.toml`.
 
-`REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1) is **not** resolved
-here — that sign-off is Member 2's, and consuming it is `core::rl`/Week 7's
-job once the decision gate is ported.
+`REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1) was **approved** at the
+checkpoint: a rekey may run at a stronger algorithm, never a weaker one.
+Consuming it is `core::rl`/Week 7's job once the decision gate is ported; the
+server already enforces the matching rule.
 
 ## Build & test
 
 ```bash
-cargo test -p core                       # unit tests (crypto + state)
-cargo test --workspace --exclude desktop # core + the server crates
-cargo build -p core --features mock      # expose the test doubles
-cargo clippy -p core --all-targets
+cargo test -p vpn_core                   # unit tests (crypto + state)
+cargo test --workspace                   # core + server crates + desktop
+cargo build -p vpn_core --features mock  # expose the test doubles
+cargo clippy -p vpn_core --all-targets
 ```
 
 ## Parity with the Python originals

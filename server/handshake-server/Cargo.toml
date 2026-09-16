@@ -31,14 +31,12 @@ vpn_core = { path = "../../core" }
 # so wire-format key/ciphertext/signature bytes are interchangeable with the
 # client side.
 ml-kem = "0.2.3"
-ml-dsa = { version = "0.1.1", features = ["getrandom"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 sha2 = "0.10"
 rand = "0.8"
 
-# Key schedule (PROTOCOL.md 5.3) - lives here until the freeze meeting decides
-# whether it belongs in core (PROTOCOL.md 8, Q2).
-hkdf = "0.12"
+# Finish MACs (PROTOCOL.md 5.3). The HKDF key schedule, the transcript and the
+# ML-DSA-65 identity all come from vpn_core (PROTOCOL.md 8, Q1/Q2/Q7 resolved).
 hmac = "0.12"
 
 hex = "0.4"

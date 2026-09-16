@@ -125,7 +125,7 @@ fn main() {
     let doc = json!({
         "schema_version": 1,
         "generated_by": "cargo run -p handshake-server --bin emit-vectors",
-        "protocol": "server/PROTOCOL.md v1 DRAFT",
+        "protocol": "server/PROTOCOL.md v1 (frozen)",
         "note": "Deterministic layers only. The KEM/DH/signature roundtrip uses fresh randomness and is covered by core's tests, crypto-spike, and the integration test.",
         "framing": framing,
         "transcript": {

@@ -80,10 +80,11 @@ REKEY_COOLDOWN_TICKS = 12          # 60 seconds
 # force, the policy's highest-ranked KEM} rather than blindly at the one in
 # force.
 #
-# This is a PROPOSED AMENDMENT to the rekey semantics frozen in Week 2 ("re-run
-# the handshake using the algorithm currently in force") and needs Member 2's
-# sign-off at the Week 4 checkpoint. Set False to get exactly the Week 2
-# behaviour. It is defaulted True because the measurement behind it is large:
+# This amends the rekey semantics frozen in Week 2 ("re-run the handshake using
+# the algorithm currently in force"). APPROVED as shipped at the Week 4
+# checkpoint (contracts/DECISIONS.md Decision 1, Member 2 sign-off), so True is
+# the contract; False still reproduces exactly the Week 2 behaviour. The
+# measurement behind it:
 #
 # Week 3 found the policy asks for rekey-now on 75% of high-security-need
 # states, including 2,034 where the oracle wants ML-KEM-1024. Under the literal

@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "generated_by": "python -m client.rl_agent.export_contracts",
-  "generated_at_utc": "2026-09-11T06:06:07Z",
+  "generated_at_utc": "2026-09-15T18:31:31Z",
   "git_commit": {
-    "head": "b5e12844b5be6b333066ff494e0dcfedc5feda18",
+    "head": "c5ada870bf4fedaa4a935871af56f0aea4f19227",
     "tree_dirty": true,
     "note": "generated from the working tree; when tree_dirty is true the artifacts do not correspond to `head` but to the commit made immediately after it"
   },
   "note": "Verify every artifact against these digests after copying them into another repo. A mismatch means the set is not the one this manifest describes; re-run the generator rather than guessing which file is stale.",
   "artifacts": {
     "contracts/algo_registry.json": {
-      "sha256": "5b2880d44e9549a19a78ec640e14fcb47978e8c54a8993b25bb2aeda983a93dc",
-      "bytes": 1694
+      "sha256": "77c3d88df34fae21a0bb170a84a790469d04640df903608f261dbb88b923754e",
+      "bytes": 1750
     },
     "contracts/state_vector.json": {
       "sha256": "52bef7c99ec5ab80e0aca4aacc9216f2a87a4170f175ec22b00ef94481e922f3",

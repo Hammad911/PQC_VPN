@@ -1,11 +1,14 @@
 //! The byte string the server signs — `PROTOCOL.md` §5.1.
 //!
-//! This is `core::crypto::hybrid_kem::build_handshake_transcript` extended with
-//! the two handshake nonces (inserted right after the algorithm name). Both the
-//! server and the test client build it from this one function so they cannot
-//! drift; unify into `core` after the freeze meeting (`PROTOCOL.md` §8, Q1).
+//! A thin wire-bytes adapter over
+//! `vpn_core::crypto::hybrid_kem::build_handshake_transcript_from_bytes`, the
+//! same function the client-side typed builder delegates to — so the server,
+//! the test client, and Member 1's `core::protocol` client cannot drift
+//! (`PROTOCOL.md` §8 Q1, resolved).
 
-use crate::wire::{AlgoCode, PROTOCOL_LABEL};
+use vpn_core::crypto::hybrid_kem::build_handshake_transcript_from_bytes;
+
+use crate::wire::AlgoCode;
 
 /// Everything that goes into the transcript, as raw wire bytes.
 pub struct TranscriptInputs<'a> {
@@ -21,28 +24,21 @@ pub struct TranscriptInputs<'a> {
 /// `label ‖ algo_name ‖ client_nonce ‖ server_nonce ‖ client_x25519_pub ‖
 ///  client_mlkem_pub ‖ server_x25519_pub ‖ mlkem_ciphertext`
 pub fn build(i: &TranscriptInputs) -> Vec<u8> {
-    let name = i.algo.transcript_name();
-    let mut t = Vec::with_capacity(
-        PROTOCOL_LABEL.len()
-            + name.len()
-            + 32 * 4
-            + i.client_mlkem_pub.len()
-            + i.mlkem_ciphertext.len(),
-    );
-    t.extend_from_slice(PROTOCOL_LABEL);
-    t.extend_from_slice(name);
-    t.extend_from_slice(i.client_nonce);
-    t.extend_from_slice(i.server_nonce);
-    t.extend_from_slice(i.client_x25519_pub);
-    t.extend_from_slice(i.client_mlkem_pub);
-    t.extend_from_slice(i.server_x25519_pub);
-    t.extend_from_slice(i.mlkem_ciphertext);
-    t
+    build_handshake_transcript_from_bytes(
+        i.algo.transcript_name(),
+        i.client_nonce,
+        i.server_nonce,
+        i.client_x25519_pub,
+        i.client_mlkem_pub,
+        i.server_x25519_pub,
+        i.mlkem_ciphertext,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::PROTOCOL_LABEL;
 
     #[test]
     fn transcript_layout_is_stable() {

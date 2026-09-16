@@ -1,7 +1,9 @@
-# PQC-VPN Handshake Wire Protocol — v1 (DRAFT)
+# PQC-VPN Handshake Wire Protocol — v1 (FROZEN)
 
-**Status:** DRAFT, proposed by Member 2 for sign-off at the end-of-Week-1 sync
-(`TEAM_TIMELINE_PROPOSAL.md` §2 item 1).
+**Status:** FROZEN v1 — drafted by Member 2 for the end-of-Week-1 sync
+(`TEAM_TIMELINE_PROPOSAL.md` §2 item 1), signed off by the team at the Week 4
+checkpoint. All §8 questions are resolved. Any incompatible change from here
+bumps `VER` (§9).
 **Owner:** Member 2 (server). **Reviewers:** Member 1 (Rust client in `core/protocol/`), Member 3.
 
 This document defines the bytes exchanged between a VPN **client** and the
@@ -27,12 +29,13 @@ since Week 2. `VER` is still `0x01`; no incompatible change has been made.
 | Week 3 | `ServerFinish` gained `server_wg_pubkey (32)`, `assigned_ip (4)`, `wg_port (2)` (§4.5) so the client needs no out-of-band tunnel config | **append-only** to one message; a `ServerFinish` reader written to the Week 2 layout would need updating, but no client existed yet |
 | Week 4 | No protocol change (containerisation only). This section added. | — |
 | Week 5 | New `Error` code `0x09 CAPACITY` (§4.7). Rekey lookup clarified: by `(client_wg_pubkey, session_id)` pair, not `session_id` alone (§4.6). `allowed-ips` always sent on `wg set` (§4.5). | additive error code; no wire-format change |
+| Week 4 checkpoint sign-off | Status DRAFT → **FROZEN v1**. §8 resolved: nonces and HKDF now live in `vpn_core` and the server uses them (Q1/Q2), identity seed persistence in `vpn_core` (Q7), `REKEY_ESCALATES` approved (Q6), so §4.6 / §6 accept an equal-or-stronger rekey `algo`. | no wire-format change; every frame, transcript, KDF and MAC value in `handshake-vectors.json` unchanged (only its `protocol` status string updated) |
 
-**For Member 1:** the client side of `core/protocol/` should be built against
-this document as of Week 4, and verified against `server/handshake-vectors.json`
-(regenerated Week 3). The only fields whose *encoding* is not yet 100% frozen are
-the ones in §8 — nonces-in-`core`, HKDF location — and those are additive, not
-wire-format changes.
+**For Member 1:** build the client side of `core/protocol/` against this document
+and verify it against `server/handshake-vectors.json`. The transcript
+(`vpn_core::crypto::hybrid_kem::build_handshake_transcript{,_from_bytes}`) and the
+key schedule (`vpn_core::crypto::derive_session_keys`) are already shared with
+the server, so only framing and the finish MACs need writing client-side.
 
 ---
 
@@ -126,7 +129,8 @@ One byte, matching `contracts/algo_registry.json` `action_index`:
 | `0x02` | ML-KEM-1024 |
 
 `action_index 3` (`rekey-now`) is **not** an on-wire algorithm — a rekey re-runs
-the handshake at the algorithm already in force (§6). HQC-256 is reserved for a
+the handshake at the algorithm already in force or a stronger one, never a
+weaker one (§6). HQC-256 is reserved for a
 future `0x03` if `algo_registry` enables it.
 
 ### 4.2 `ClientHello` (0x01)
@@ -199,14 +203,13 @@ matches that peer's current session; if the pubkey is unknown or the
 `ServerHello` / expects `ClientFinish` as normal, and swaps the peer's PSK
 **without** removing the peer, so the tunnel does not drop (§6).
 
-`algo` rule (depends on open Decision 1, §8):
+`algo` rule (`REKEY_ESCALATES`, approved — §8 Q6):
 - **downgrade is always rejected** — `algo` weaker than the session's in-force
   algorithm → `Error(ALGO_MISMATCH)`. A step down in strength is a full new
   handshake (`ClientHello`), never a rekey.
-- `algo` **equal to** in-force: always allowed.
-- `algo` **stronger than** in-force: allowed **iff `REKEY_ESCALATES` is approved**
-  (Member 3's reference client defaults to this — see §8). If rejected, this is
-  also `Error(ALGO_MISMATCH)` and an escalation must come as a `ClientHello`.
+- `algo` **equal to** in-force: allowed.
+- `algo` **stronger than** in-force: allowed. The handshake runs at the
+  requested level and the session's in-force algorithm is raised to it.
 
 ### 4.7 `Error` (0xEE)
 
@@ -233,9 +236,9 @@ matches that peer's current session; if the pubkey is unknown or the
 
 ### 5.1 Transcript
 
-Byte string both sides compute identically. This extends
-`core::crypto::hybrid_kem::build_handshake_transcript` with the two nonces
-(**proposed change to `core`** — see §8):
+Byte string both sides compute identically, via the one shared function
+`vpn_core::crypto::hybrid_kem::build_handshake_transcript_from_bytes` (the typed
+client-side `build_handshake_transcript` delegates to it):
 
 ```
 transcript =
@@ -287,25 +290,21 @@ server runs a fresh handshake, derives a new `psk`, and updates the existing
 peer's preshared key. The server MUST NOT `wg set ... remove` the peer or force
 the tunnel down; WireGuard picks up the new PSK on its next handshake.
 
-**Open amendment — `REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1):**
-Member 3's Week 3 work found the RL policy asks for `rekey-now` on ~75% of
-high-threat states, some of which actually need a stronger KEM. Their reference
-client therefore defaults to rekeying at the *stronger* of {in-force algorithm,
-the policy's top choice} — never weaker. This means a rekey can legitimately
+**Amendment — `REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1, approved
+at the Week 4 checkpoint):** Member 3's Week 3 work found the RL policy asks for
+`rekey-now` on ~75% of high-threat states, some of which actually need a
+stronger KEM. The client therefore rekeys at the *stronger* of {in-force
+algorithm, the policy's top choice} — never weaker. A rekey can legitimately
 arrive at a higher algorithm than the session started with.
 
-For the server the two positions differ only in one check:
-- **`REKEY_ESCALATES` approved:** accept `RekeyRequest.algo >= in_force`, do the
-  handshake at the requested level, swap the PSK. Update the session's in-force
-  algorithm to the new (higher) level.
-- **rejected (strict Week 2):** accept only `RekeyRequest.algo == in_force`.
+Server rule: accept `RekeyRequest.algo >= in_force`, do the handshake at the
+requested level, swap the PSK, and raise the session's in-force algorithm to the
+new level (`registry.rs::Registry::rekey`). A **downgrade** is never a rekey, and
+"when to rotate" vs "how strong" remain the client's decisions — the server just
+responds.
 
-Either way, a **downgrade** is never a rekey, and "when to rotate" vs "how
-strong" remain the client's decisions — the server just responds.
-
-An algorithm change that the strict rule would forbid (or any downgrade) is a
-full new handshake: new `ClientHello`, new `session_id`, then the client points
-its WireGuard at the new PSK.
+A downgrade is a full new handshake: new `ClientHello`, new `session_id`, then
+the client points its WireGuard at the new PSK.
 
 ---
 
@@ -321,40 +320,33 @@ its WireGuard at the new PSK.
 
 ---
 
-## 8. Open questions for the freeze meeting
+## 8. Resolved questions (Week 4 checkpoint sign-off)
 
-1. **Nonces in the transcript.** `core::build_handshake_transcript` currently
-   signs no freshness value. §5.1 adds `client_nonce ‖ server_nonce`. This is a
-   small change to one function in `core/crypto/hybrid_kem.rs` and its callers.
-   Member 1: acceptable to make this now, before the client consumer is built?
-2. **HKDF vs raw secret.** `core` returns the raw 32-byte `hybrid_secret`. §5.3
-   layers HKDF on top for PSK/confirm-key separation. Does this live in `core`
-   (shared) or in each of `server/` and `core/protocol/` separately? Proposed:
-   a `core::crypto::derive_session_keys(hybrid_secret, client_nonce, server_nonce)`
-   helper so both sides cannot drift.
-3. **Server ML-KEM key ownership.** The proposal text says "the server signs its
-   ML-KEM public key". The frozen `core` code instead has the **client** hold the
-   ML-KEM keypair and the server encapsulate; the server signs the whole
-   transcript (which covers its ephemeral X25519 key and the ciphertext). The
-   transcript approach is strictly stronger. Proposal: keep the code as-is,
-   correct the proposal wording. Needs an explicit "yes".
-4. **Port number.** `51821/tcp` is a proposal. Any objection?
-5. **Client identification.** §4.2 sends `client_wg_pubkey` in the clear so the
-   server knows which peer to bind the PSK to. Is the WireGuard public key the
-   right peer identifier, or do we want a separate account/enrolment step first?
-   (Enrolment is not in the 3-month plan; assuming pubkey-is-identity for now.)
-6. **`REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1).** Member 3 needs
-   Member 2's explicit sign-off that a rekey may return a *stronger* algorithm
-   than the session's current one (§6). This protocol is written to support
-   either outcome; the vote just fixes which `algo` values the server accepts on
-   `RekeyRequest`. Recommend: **approve** — the alternative (every escalation is
-   a full new `ClientHello` + new `session_id`) is more work on both sides for no
-   security gain.
-7. **Identity persistence in `core`.** `core::crypto::auth::ServerAuthenticator`
-   exposes no load/save, so `server/handshake-server`'s `identity` module uses
-   `ml-dsa` directly (persisting the 32-byte seed). Ask: add
-   `ServerAuthenticator::{to_seed_bytes, from_seed_bytes}` (or equivalent) to
-   `core` so the server uses the shared wrapper. Low-risk, additive.
+Kept as a record of what was asked at the freeze and what was decided.
+
+1. **Nonces in the transcript — yes, done.** `vpn_core`'s transcript builder
+   takes `client_nonce ‖ server_nonce` right after the algorithm name (Member 1,
+   Week 4). The server builds its transcript through the same function
+   (`build_handshake_transcript_from_bytes`), so the two cannot drift.
+2. **HKDF location — in `vpn_core`, done.**
+   `vpn_core::crypto::derive_session_keys(hybrid_secret, client_nonce,
+   server_nonce)`; the server's `kdf::derive` now calls it. The finish MACs stay
+   in the server crate until `core::protocol` (Week 6) needs them client-side.
+3. **ML-KEM key ownership — keep the code.** The client holds the ephemeral
+   ML-KEM keypair, the server encapsulates, and the server signs the whole
+   transcript (covering both ephemeral X25519 keys, the ML-KEM public key and the
+   ciphertext). Strictly stronger than "the server signs its ML-KEM public key";
+   the proposal wording is corrected in `RL_PQC_VPN_Proposal_v2.md`.
+4. **Port — `51821/tcp` approved.**
+5. **Client identification — the WireGuard public key is the peer identity** for
+   this quarter. A separate enrolment step is out of scope (future work).
+6. **`REKEY_ESCALATES` — approved** (`contracts/DECISIONS.md` Decision 1). A rekey
+   may carry an equal or stronger algorithm, never a weaker one (§4.6, §6).
+7. **Identity persistence in `core` — done.**
+   `ServerAuthenticator::{to_seed_bytes, from_seed_bytes}` exist; the server's
+   `identity` module wraps `ServerAuthenticator` and no longer uses `ml-dsa`
+   directly. Persisted seeds are unchanged, so the pinned key on the droplet
+   stays valid.
 
 ## Reference implementation
 
@@ -367,7 +359,7 @@ way `contracts/*_vectors.json` work.
 
 ---
 
-## 9. What is frozen once this is signed off
+## 9. What is frozen (signed off at the Week 4 checkpoint)
 
 - Message types, header format, field order and encoding (§3, §4).
 - The transcript definition and signing rule (§5.1, §5.2).
