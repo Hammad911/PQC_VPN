@@ -11,6 +11,7 @@ mock = []
 
 [dependencies]
 hkdf = "0.12"
+hmac = "0.12"
 kem = "0.3.0-pre.0"
 ml-dsa = { version = "0.1.1", features = ["getrandom", "zeroize"] }
 ml-kem = "0.2.3"
@@ -18,3 +19,11 @@ rand = "0.8"
 sha2 = "0.10"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 zeroize = { version = "1.9", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+# Only for the Week 6 over-the-network tests in `src/protocol/transport.rs`,
+# which spin up the real server-side connection handler and drive
+# `core::protocol` against it over a loopback socket. `handshake-server`'s
+# *normal* dependencies point at `vpn_core`, not the other way around, so
+# this dev-only edge does not create a build cycle.
+handshake-server = { path = "../server/handshake-server" }
