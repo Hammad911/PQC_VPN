@@ -1313,6 +1313,42 @@ the commit messages and `core/README.md`.
 
 Tests at Week 5: `vpn_core` 34, `desktop` 6.
 
+## Week 6 (Member 1 track, 2026-09-22) — `core::protocol` client
+
+`TEAM_TIMELINE_PROPOSAL.md`'s Week 6 task: integrate `protocol/`'s client
+side against Member 2's server and get a first real handshake over the
+network, Rust client against the real (not mocked) `server/handshake-server`.
+
+`core/src/protocol/` was an empty stub before this week; `server/PROTOCOL.md`
+names it directly ("build the client side of `core/protocol/` against this
+document and verify it against `server/handshake-vectors.json`"). Delivered:
+
+- **`wire.rs`** — message framing (`ClientHello`/`ServerHello`/
+  `ClientFinish`/`ServerFinish`/`RekeyRequest`/`Error`), byte-for-byte against
+  `PROTOCOL.md` §3–4. `crate::crypto::MlKemLevel` gained the wire byte-codes
+  and encoded lengths so the protocol layer doesn't duplicate a second
+  algorithm enum.
+- **`tags.rs`** — the `ClientFinish`/`ServerFinish` confirmation MACs
+  (§5.3). These previously only existed server-side
+  (`server/handshake-server/src/kdf.rs`); moving them here is the piece
+  `PROTOCOL.md` explicitly flags as needed once `core::protocol` exists.
+- **`client.rs`** — `ClientHandshake`: generates ephemeral keys, builds
+  `ClientHello`, verifies the server's ML-DSA-65 signature against a pinned
+  key *before* deriving any secret, decapsulates, derives session keys.
+- **`transport.rs`** — `connect()`, the only place in `core` that opens a
+  real `TcpStream`; drives the four-message exchange and returns a
+  `TunnelConfig` for `TunnelHandle::bring_up` (Week 9).
+
+**Verification:** framing and MACs checked field-by-field against
+`server/handshake-vectors.json` (not just Rust struct equality — re-encoded
+bytes compared against the vector file's exact hex). `transport.rs` includes
+an over-the-network test that spins up the real `handshake-server` connection
+handler on a loopback socket and runs `core::protocol::connect` against it,
+plus a negative test confirming a wrong pinned key is rejected client-side.
+
+`cargo test --workspace` — `vpn_core` 52/52 (34 prior + 18 new), all other
+crates unaffected (`handshake-server` 22+4, `desktop` 6).
+
 ## Week 4 checkpoint closed (2026-09-15) — contracts frozen, server on shared crypto
 
 The end-of-Week-4 sync (`TEAM_TIMELINE_PROPOSAL.md` §6) is recorded:
