@@ -1337,6 +1337,96 @@ The end-of-Week-4 sync (`TEAM_TIMELINE_PROPOSAL.md` §6) is recorded:
 - **Proposal v2** (`RL_PQC_VPN_Proposal_v2.md` / `.pdf`) matches the design as
   built. v1 is kept for history.
 
+## Week 6 (Member 2 track, 2026-09-22) — live rekey: test-client support + integration proof
+
+Assigned task (`TEAM_TIMELINE_PROPOSAL.md`): support live rekey — when a
+connected client's agent triggers `rekey-now`, the server must accept a fresh
+handshake for an *existing* peer and swap its PSK without dropping the
+tunnel; first real integration test against Member 1's client.
+
+### What was already in place
+
+Week 5's registry work landed ahead of the plan: the wire protocol's
+`RekeyRequest` (`PROTOCOL.md` §4.6), `Registry::rekey` (session/downgrade
+checks, `REKEY_ESCALATES` escalation), and `server.rs`'s connection handler
+already dispatched `ClientHello`/`RekeyRequest` end-to-end into the same
+`handle_connection`, and `PskInstaller::install` is idempotent — a rekey
+re-sets the same `allowed-ips` and never calls `remove_peer`, which is the
+no-drop guarantee by construction. What was missing, and flagged as deferred
+in the Week 3 notes, was any way to *exercise* that path: `test-client` had
+no rekey mode, and nothing drove `RekeyRequest` over a real TCP connection —
+only `Registry::rekey` itself was unit-tested, in isolation from the wire
+dispatch and the installer. This week closes that gap.
+
+### `test-client --rekey`
+
+A first run now also prints a ready-to-paste `test-client ... --rekey
+--session <hex> --wg-key <base64>` command alongside the `wg-quick` config —
+`--session` is the session id from `ServerFinish`, `--wg-key` is the same
+client's WireGuard private key (a rekey must come from the same peer
+identity). Running it sends a `RekeyRequest` instead of a `ClientHello`, and
+on success prints the new derived PSK plus the exact `wg set <iface> peer …
+preshared-key …` one-liner to hot-swap it — no `wg-quick down` — so the
+rekey can be rehearsed by hand against a tunnel that's actually up and
+passing traffic: bring the tunnel up from the first run's config, `ping`
+through it, run the `--rekey` command, hot-swap the PSK, confirm the `ping`
+never stopped and `wg show` reflects the swap.
+
+### Integration tests (`tests/handshake.rs`)
+
+New `RecordingInstaller` (a `PskInstaller` that logs every `install` /
+`remove_peer` call instead of touching real WireGuard) backs four new
+over-the-wire tests:
+
+- `over_tcp_rekey_swaps_psk_without_removing_peer` — full handshake, then a
+  `RekeyRequest` on the same session that escalates the algorithm. Asserts
+  the assigned IP is unchanged, the two `install` calls used different PSKs
+  and the escalated algorithm on the second, the registry still has exactly
+  one peer — and, the actual no-drop proof, that `remove_peer` was never
+  called across either step.
+- `over_tcp_rekey_rejects_unknown_session` / `…_session_mismatch_for_known_peer`
+  — a rekey claiming a session the registry has no record of, or the wrong
+  session for a known peer, both come back `Error(0x04 UNKNOWN_SESSION)` over
+  the wire and never touch the installer.
+- `over_tcp_rekey_rejects_downgrade` — a rekey at a weaker algorithm than
+  in-force comes back `Error(0x05 ALGO_MISMATCH)` and is not installed.
+
+These are the first tests to exercise `RekeyRequest` through the real
+`TcpListener` + `handle_connection` path rather than calling
+`Registry::rekey` directly.
+
+### Verified
+
+- `cargo test -p handshake-server` — 22 unit + 8 integration (4 new
+  `over_tcp_rekey_*`), all passing.
+- **Live rekey against the droplet**, native Windows client (official
+  WireGuard app + a natively-built `test-client.exe` — WSL2 was ruled out
+  for this one test session by an unrelated local networking quirk, not
+  anything in this code). Full PQC handshake at ML-KEM-768, tunnel brought
+  up, then `test-client --rekey` against the same session escalated to
+  ML-KEM-1024; server accepted it, returned the same session id and
+  `10.8.0.2` address, derived a new PSK. Hot-swapped the `PresharedKey` in
+  the running WireGuard tunnel (no deactivate). `wg show wg0` on the
+  droplet afterward: same peer entry throughout (never removed/re-added),
+  `latest handshake` refreshed a few minutes post-rekey, transfer counters
+  climbing rather than reset — the tunnel never dropped.
+- Droplet housekeeping done along the way: confirmed the `pqc-handshake-server`
+  container and `wg0` both survive a droplet power cycle (Docker
+  `restart: unless-stopped` + `wg-quick@wg0` enabled on boot); the registry
+  was wiped (`rm peers.json` + container restart, which reconciles `wg0`
+  back to empty) partway through testing to get a clean peer for the final
+  run.
+
+### Status against the Week 6 mandate
+
+Server-side rekey was substantially built during Week 5; this week adds the
+missing proof — a `test-client` rekey mode for rehearsing it against a live
+tunnel, and integration tests that drive `RekeyRequest` over real TCP and
+assert the no-drop property directly, rather than trusting it by
+inspection. `core/` and `contracts/` untouched — nothing here blocks
+Member 1's Week 6 client-side integration; the server already accepts real
+`ClientHello`/`RekeyRequest` over TCP from any conforming client.
+
 ## How to reproduce
 
 ```bash

@@ -39,6 +39,12 @@ cargo run -p handshake-server --bin handshake-server -- \
 cargo run -p handshake-server --bin test-client -- \
     <handshake-host:port> <verifying-key-hex | @path> --algo 512|768|1024
 
+# rekey the same peer (Week 6) — reuses the session id + wg keypair the run
+# above printed; prints the new PSK and a `wg set` line to hot-swap it live
+cargo run -p handshake-server --bin test-client -- \
+    <handshake-host:port> <verifying-key-hex | @path> --rekey \
+    --session <hex> --wg-key <base64 | @path> [--algo 512|768|1024]
+
 # regenerate server/handshake-vectors.json
 cargo run -p handshake-server --bin emit-vectors -- server/handshake-vectors.json
 ```
@@ -49,12 +55,16 @@ identity file as `<identity>.pub` (hex). That hex is what a client pins.
 ## Tests
 
 ```bash
-cargo test -p handshake-server        # 22 unit + 4 integration
+cargo test -p handshake-server        # unit + integration — see tests/handshake.rs
 ```
 
 `tests/handshake.rs` includes `over_tcp_full_handshake_returns_tunnel_params` —
 a real `TcpListener` handshake for ML-KEM-512/768/1024 with both sides asserting
-the same PSK, plus a dry-run PSK install and the returned tunnel params.
+the same PSK, plus a dry-run PSK install and the returned tunnel params — and,
+since Week 6, `over_tcp_rekey_*`: a `RekeyRequest` over the same real
+`TcpListener` path, asserting the PSK actually changes, the assigned IP and
+registry entry don't, and — the no-drop proof — a recording `PskInstaller`
+that never sees `remove_peer` called across a rekey.
 
 ## Not yet done (later weeks)
 
@@ -62,11 +72,6 @@ the same PSK, plus a dry-run PSK install and the returned tunnel params.
   `wg0` restart the peers are gone from the interface but kept in the registry;
   their clients re-handshake. (Writing `wg0.conf` for true persistence is
   possible later; the registry + reconciliation covers the container case.)
-- **No `RekeyRequest` CLI.** The server-side rekey path (`PROTOCOL.md` §6,
-  including the approved `REKEY_ESCALATES` rule — equal or stronger, never
-  weaker — and the
-  `(wg_pubkey, session_id)` lookup) is implemented and unit-tested; a
-  `--rekey` flag on `test-client` lands Week 6.
 - **Replay cache / rate limiting** — fields are in the protocol; enforcement is
   Week 7.
 - **Idle eviction** is implemented (`--idle-timeout-secs`) but off by default;
