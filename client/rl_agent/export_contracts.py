@@ -201,6 +201,14 @@ _GATE_SCENARIOS = [
      [_REKEY_PREFERRING_512]),
     ("a rekey resets a challenger streak, even when it does not escalate", 2,
      [_CHALLENGE_512, _CHALLENGE_512, _REKEY_NO_ESCALATE, _CHALLENGE_512]),
+    # The Week 4 bug (tests/test_phase4.py::test_escalation_resets_the_confirm_streak):
+    # two ticks bank a streak toward ML-KEM-768, a rekey escalates in-force to
+    # ML-KEM-1024, and the challenger's next tick must start a fresh streak
+    # rather than confirm a one-tick downgrade. None of the cases above
+    # exercised the escalating branch with a streak live, so a port could pass
+    # them all and still carry the bug.
+    ("an escalating rekey resets a challenger streak", 0,
+     [_CHALLENGE_768, _CHALLENGE_768, _REKEY_PREFERRING_1024, _CHALLENGE_768]),
 ]
 
 
@@ -218,6 +226,7 @@ def build_decision_gate_vectors() -> dict:
                     "in_force_name": d.in_force_name,
                     "change_algorithm": bool(d.change_algorithm),
                     "rekey": bool(d.rekey),
+                    "reason": d.reason,
                 },
             })
         cases.append({"name": name, "initial_in_force": initial, "ticks": steps})
@@ -229,8 +238,9 @@ def build_decision_gate_vectors() -> dict:
         "purpose": (
             "Verify a port of the decision gate tick-for-tick. Feed each "
             "case's `probs` (softmax over the ONNX logits) to the gate in "
-            "order, starting from `initial_in_force`, and assert the three "
-            "`expect` fields after every tick. The gate is stateful, so a "
+            "order, starting from `initial_in_force`, and assert every "
+            "`expect` field after every tick (`reason` is one of the gate's "
+            "fixed strings, so a port can compare it exactly). The gate is stateful, so a "
             "case only means anything replayed in sequence from a fresh gate."
         ),
         "constants": {
