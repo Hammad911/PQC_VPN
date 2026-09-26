@@ -56,6 +56,7 @@ def test_gate_vectors_replay_against_the_python_source():
             assert d.in_force == want["in_force"], f"{case['name']} tick {i}"
             assert d.change_algorithm == want["change_algorithm"], f"{case['name']} tick {i}"
             assert d.rekey == want["rekey"], f"{case['name']} tick {i}"
+            assert d.reason == want["reason"], f"{case['name']} tick {i}"
 
 
 def test_gate_constants_in_vectors_match_the_module():

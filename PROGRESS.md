@@ -1463,12 +1463,175 @@ inspection. `core/` and `contracts/` untouched — nothing here blocks
 Member 1's Week 6 client-side integration; the server already accepts real
 `ClientHello`/`RekeyRequest` over TCP from any conforming client.
 
+## Week 7 (Member 3 track, 2026-09-26) — decision-gate Rust port, anomaly Layer 3
+
+The delivery plan's Week 7 task has two parts: the Rust reference port of the
+decision gate for Member 1's Week 7 wiring, verified against
+`contracts/decision_gate_vectors.json`, and anomaly Layer 3 (define the
+feature vector, build benign training data, train `sklearn.IsolationForest`).
+The gate went first because Member 1 is blocked on it this week.
+
+### Closing a gap in the gate vectors first
+
+The Week 4 fix (`test_escalation_resets_the_confirm_streak`) had no matching
+case in `decision_gate_vectors.json`. A port could pass every shipped case and
+still keep a streak alive across an *escalating* rekey. Two changes in
+`export_contracts.py`:
+
+- a 10th case, "an escalating rekey resets a challenger streak": two ticks
+  build a streak toward ML-KEM-768, a rekey escalates to ML-KEM-1024, and the
+  next challenger tick must start a fresh streak rather than confirm a
+  one-tick downgrade;
+- every tick's `expect` now carries `reason`, so a port has to match the fixed
+  reason strings exactly. All seven are exercised across the cases.
+
+After regeneration the `.onnx` and `policy_test_vectors.json` are
+byte-identical. Only the gate vectors and the manifest changed.
+`test_phase4.py`'s replay now also asserts `reason`.
+
+### `vpn_core::rl::gate` (`core/src/rl/gate.rs`)
+
+A line-for-line port of `DecisionGate.update`:
+
+- **Types:** `in_force` is an `MlKemLevel` rather than an integer, so the gate
+  cannot hold `rekey-now` as the algorithm in force. `PolicyAction::from_index`
+  maps a policy output index to `Kem(MlKemLevel)` / `RekeyNow` by reusing
+  `MlKemLevel::from_wire_code`. KEM action indices equal wire codes, so there
+  is still only one algorithm table.
+- **Constants and reasons:** constants use the same names as the Python, and
+  the reasons are `&'static str`, so a tick allocates nothing.
+- **Argmax:** ties go to the first index, matching Python's `max(range, key=)`.
+- **`softmax` helper:** stable against large logits, because `ort` returns
+  logits and the gate needs probabilities.
+
+**Tests (6):**
+- replays all 10 vector cases tick-by-tick, checking all five `expect`
+  fields;
+- a constants drift guard against the vector file;
+- rekey cooldown expiry, `rekey_escalates = false`, index round-trip, and
+  softmax.
+
+`serde_json` is a dev-dependency only, so there is no new runtime dependency
+in `core`.
+
+**Mutation check:** reintroducing the Week 4 bug (leaving the streak untouched
+on a rekey tick) fails the vector replay at "a rekey resets a challenger
+streak, even when it does not escalate", tick 3. The first mutation attempt
+did *not* reproduce the bug: it fell through to the branch that reassigns the
+candidate. That's a reminder that a mutation check has to reproduce the bug
+itself, not a lookalike.
+
+`contracts/INTEGRATION.md` step 3 now points at `rl::gate`. It also fixes a
+bug in the pseudocode: the old version applied `softmax` to vector `probs`
+that the file already stores softmaxed.
+
+### Layer 3 — `IsolationForestLayer` (`client/rl_agent/anomaly_detector.py`)
+
+**Features** (`LAYER3_FEATURES`, frozen order, pinned by a test for the Week 8
+Rust port). One vector per 5 s tick from caller-supplied packets (sizes,
+arrival times, direction), via `tick_features`:
+
+| feature | meaning |
+|---|---|
+| `out_size_mean` | bytes per outbound packet |
+| `in_size_mean` | bytes per inbound packet |
+| `pkt_size_std` | pooled size spread; ~0 means uniform packets (a scan) |
+| `log_pkt_rate` | log10(1 + packets/s) |
+| `iat_cv` | std/mean of inter-arrival gaps; ~0 is clockwork, ~1 Poisson, >1 bursty |
+| `upload_share` | outbound bytes / total |
+
+Ticks with fewer than 3 packets are not `ready`, because `iat_cv` is undefined
+there. Inter-arrival *mean* was left out on purpose: over a fixed tick it is
+just 1/rate.
+
+**How the feature set was arrived at.** The first set was
+pooled size mean/std, rate, `iat_cv`, and upload share. It detected exfiltration
+**0%** of the time. The cause is structural, not a matter of tuning: an Isolation
+Forest cannot score a point *beyond* its training range any higher than the
+benign points at that edge. "More upload than any benign tick" therefore
+scored like a video call. Splitting size by direction turns exfiltration into
+high-rate traffic with tiny inbound packets. That region lies *inside* the
+feature ranges and no benign profile occupies it, so it went to 100%.
+Dropping the pooled std for that change cost port-scan detection (99% → 21.5%),
+because uniform packet size was what gave scans away. Restoring it as a sixth
+feature brought scans back to 100%.
+
+**Training data** (`train_isolation_forest.py`). The data is simulated, since
+there is no captured traffic yet. Five benign profiles (idle, browsing,
+streaming, bulk download, video call) are built packet by packet and reduced
+through the real `tick_features`. Three attack mixes (exfiltration, port scan,
+beaconing) are used only for measurement; the forest never sees them.
+Settings: `n_estimators=100`, `random_state=0`, 5,000 training ticks. The model
+is saved to `models/isolation_forest.joblib` (403 KB, compressed), and the
+calibration and measurements to `models/isolation_forest_calibration.json`.
+
+**Scoring.** The threshold is the 99.5th percentile of held-out benign scores.
+`threat_score` uses the same squash as Layers 1–2: 0 at the benign median, 0.5
+at the threshold, 1.0 at twice that distance.
+
+**Measured**, on held-out data; seeds 0–3 were each retrained and recalibrated:
+
+| | seed 0 (shipped) | seeds 1–3 |
+|---|---|---|
+| benign false positives, overall | 0.50% | 0.50% |
+| — idle (the noisiest: 5–25 packets a tick) | 2.50% | 2.25–2.50% |
+| — browsing / streaming / bulk / video call | 0.00% | 0.00% |
+| exfiltration detected | 100% | 100% |
+| port scan detected | 100% | 98.8–100% |
+| beaconing detected | 87.5% | 81.5–88.5% |
+
+These are numbers against simulated shapes, not captures. The profiles are
+reasoned first-pass choices like `state_observer.py`'s caps, and need
+re-deriving once Member 1's Week 8 live source can record real traffic. A
+legitimate large upload (a cloud backup) would look like exfiltration here.
+That is the same caveat Layer 2's `BandwidthExfiltrationSignature` carries,
+and no benign upload-heavy profile was invented to hide it.
+
+`LAYER3_CPU_GATE = 0.40` is defined. The combiner does not read it yet.
+
+### Tests — `tests/test_phase7.py` (new, 19 tests)
+
+- **Feature contract:** a feature-order pin, the calibration file matching the
+  module, the layer refusing a calibration with a different order, and the
+  gate ordering (L3 < L2).
+- **`tick_features`:** checked on a hand-built tick with every value computed
+  by hand, plus timestamp sorting, the one-direction case, and a sparse tick
+  being not-`ready`.
+- **Measured-behaviour floors on a fresh seed:** benign FP ≤ 2% per profile
+  (idle ≤ 6%); detection ≥ 95% for exfiltration and port scan, and ≥ 70% for
+  beaconing.
+- **Scoring:** result shape and [0,1] range, the squash checked through
+  `update()` with a stub model, and training determinism under a seed.
+
+`pytest tests/ -v`: 113/113 (94 prior + 19 new). `cargo test --workspace`:
+`vpn_core` 58/58 (52 prior + 6 new), and every other crate is unaffected.
+`python demo.py` runs end to end.
+
+### Deliberately not done (Week 8)
+
+- Layer 3 is not wired into `AnomalyCombiner`, so the THREAT
+  `produced_by` text is unchanged.
+- There is no Rust export of the forest. It will go through either `skl2onnx`
+  or a hand-written tree-traversal port. The joblib pickle is Python-only and
+  tied to scikit-learn 1.5.0 (recorded in the calibration file).
+- There is no Rust port of Layers 1–2 + the combiner, and no
+  `contracts/anomaly_vectors.json`.
+
+### Status against the Week 7 mandate
+
+- **Decision gate:** the Rust reference port is shipped and verified against
+  the vectors. The vectors now cover the Week 4 bug, and the replay was shown
+  to catch it.
+- **Layer 3:** the feature vector is defined, benign training data exists
+  (simulated, and stated as such), and the Isolation Forest is trained,
+  calibrated and tested.
+
 ## How to reproduce
 
 ```bash
 source venv/bin/activate
 pip install -r requirements.txt   # liboqs-python must be built separately
-pytest tests/ -v                  # 94/94
+pytest tests/ -v                  # 113/113
 cargo test --workspace            # vpn_core, handshake-server, desktop
 cargo run -p handshake-server --bin emit-vectors   # regenerate server/handshake-vectors.json
 
@@ -1479,6 +1642,7 @@ python -m client.rl_agent.export_contracts  # regenerate contracts/ + the .onnx
 
 python -m client.rl_agent.verify_policy      # Week 3 robustness checks
 python -m client.rl_agent.decision_gate     # sizes the debounce constants
+python -m client.rl_agent.train_isolation_forest  # Week 7: train + calibrate anomaly Layer 3
 
 python -m client.rl_agent.train             # single run, Week 2 defaults
 python -m client.rl_agent.train --sweep --promote            # the Week 2 experiment

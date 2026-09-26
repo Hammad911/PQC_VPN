@@ -1,0 +1,31 @@
+{
+  "generated_by": "python -m client.rl_agent.train_isolation_forest",
+  "features": [
+    "out_size_mean",
+    "in_size_mean",
+    "pkt_size_std",
+    "log_pkt_rate",
+    "iat_cv",
+    "upload_share"
+  ],
+  "sklearn_version": "1.5.0",
+  "seed": 0,
+  "n_estimators": 100,
+  "train_ticks": 5000,
+  "note": "Trained and measured on simulated traffic only; the profiles in train_isolation_forest.py are first-pass shapes, not captures. Re-derive once real traffic is available.",
+  "score_median": 0.4783566634223771,
+  "score_threshold": 0.6280825236645683,
+  "threshold_quantile": 0.995,
+  "benign_false_positive_rate": {
+    "idle": 0.025,
+    "browsing": 0.0,
+    "streaming": 0.0,
+    "bulk_download": 0.0,
+    "video_call": 0.0
+  },
+  "attack_detection_rate": {
+    "exfiltration": 1.0,
+    "port_scan": 1.0,
+    "beaconing": 0.875
+  }
+}

@@ -23,7 +23,7 @@ the latter).
 | `crypto/` | Hybrid X25519 + ML-KEM (512/768/1024), ML-DSA-65 server auth (now with seed persistence), the zeroizing key store, the nonce-bound signed handshake transcript (typed, plus `build_handshake_transcript_from_bytes` for wire bytes), the shared `derive_session_keys` HKDF helper — all used by `server/handshake-server` too | **done** (plan Weeks 2–3, Week 4 checkpoint) |
 | `state/` | `DeviceState` + `TunnelHandle` traits, `StatePipeline` (builds the frozen 7-dim RL state vector), `NormalizationCaps`, mock implementations | **traits done** (plan Week 3); desktop `DeviceState` via `sysinfo` done (Week 5) |
 | `protocol/` | Client side of the handshake wire protocol (`server/PROTOCOL.md`) | stub — plan Week 6 |
-| `rl/` | ONNX inference over the trained policy + the decision gate (`contracts/`) | stub — plan Week 7 |
+| `rl/` | ONNX inference over the trained policy + the decision gate (`contracts/`) | **decision gate done** (`rl::gate`, Week 7, Member 3); `ort` inference is Member 1's Week 7 wiring |
 | `anomaly/` | Layers 1–3 + the CPU-gated combiner (`client/rl_agent/anomaly_detector.py`) | stub — plan Week 8 |
 
 `desktop/` (Tauri shell) — window, system tray, and a `connect` / `disconnect`
@@ -95,7 +95,7 @@ done (`core/src/crypto/{hybrid_kem,auth,kdf}.rs`):
 
 `REKEY_ESCALATES` (`contracts/DECISIONS.md` Decision 1) was **approved** at the
 checkpoint: a rekey may run at a stronger algorithm, never a weaker one.
-Consuming it is `core::rl`/Week 7's job once the decision gate is ported; the
+`core::rl::gate` implements it (`REKEY_ESCALATES = true`, Week 7); the
 server already enforces the matching rule.
 
 ## Build & test

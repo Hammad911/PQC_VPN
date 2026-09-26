@@ -4544,11 +4544,14 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vpn_core"
 version = "0.1.0"
 dependencies = [
+ "handshake-server",
  "hkdf",
+ "hmac",
  "kem",
  "ml-dsa",
  "ml-kem",
  "rand",
+ "serde_json",
  "sha2",
  "x25519-dalek",
  "zeroize",

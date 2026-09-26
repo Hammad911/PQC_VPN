@@ -27,3 +27,6 @@ zeroize = { version = "1.9", features = ["zeroize_derive"] }
 # *normal* dependencies point at `vpn_core`, not the other way around, so
 # this dev-only edge does not create a build cycle.
 handshake-server = { path = "../server/handshake-server" }
+# Only for `src/rl/gate.rs`'s tests, which parse
+# `contracts/decision_gate_vectors.json` to replay the gate tick-for-tick.
+serde_json = "1"

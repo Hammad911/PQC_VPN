@@ -92,17 +92,24 @@ noise.
 So put the decision gate between the policy and the crypto layer.
 `client/rl_agent/decision_gate.py` is the reference implementation — about 40
 lines of counters and comparisons, designed to be transliterated rather than
-called. Port it and verify against `decision_gate_vectors.json`, which replays
-tick-by-tick exactly like the policy vectors do:
+called.
+
+**The Rust port is done (Week 7): `vpn_core::rl::gate`** (`core/src/rl/gate.rs`).
+Construct a `DecisionGate::new(level)` per session with the algorithm
+negotiated at connect time, run the ONNX model, and feed
+`gate.update(&softmax(&logits))` every tick. `PolicyAction::from_index` maps
+an output index to `MlKemLevel` / `RekeyNow`. Its tests replay every case in
+`decision_gate_vectors.json` tick-by-tick, like this:
 
 ```
 for case in cases:
     gate = DecisionGate(in_force = case.initial_in_force)
     for tick in case.ticks:
-        d = gate.update(softmax(tick.probs))
+        d = gate.update(tick.probs)          # already softmax'd in the file
         assert d.in_force == tick.expect.in_force
         assert d.change_algorithm == tick.expect.change_algorithm
         assert d.rekey == tick.expect.rekey
+        assert d.reason == tick.expect.reason
 ```
 
 The gate is stateful, so a case only means anything replayed in order from a
